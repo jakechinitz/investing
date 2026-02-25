@@ -2,6 +2,7 @@ import React from 'react';
 
 const TABS = [
   { id: 'portfolio', icon: '\u{1F4CA}', label: 'Portfolio' },
+  { id: 'optimizer', icon: '\u{1F3AF}', label: 'Optimizer' },
   { id: 'settings', icon: '\u{2699}\uFE0F', label: 'Settings' },
   { id: 'results', icon: '\u{1F4C8}', label: 'Results' },
   { id: 'historical', icon: '\u{1F4DC}', label: 'Historical' },
