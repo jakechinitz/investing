@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 portfolio_state.json
+node_modules/
+dist/
+.DS_Store
