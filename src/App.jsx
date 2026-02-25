@@ -5,6 +5,7 @@ import PortfolioBuilder from './components/PortfolioBuilder.jsx';
 import SimulationConfig from './components/SimulationConfig.jsx';
 import ResultsDashboard from './components/ResultsDashboard.jsx';
 import ActualReturnsPanel from './components/ActualReturnsPanel.jsx';
+import Optimizer from './components/Optimizer.jsx';
 import { runMonteCarlo, runBacktest } from './engine/simulation.js';
 import { fetchAllReturns } from './data/fetchReturns.js';
 
@@ -140,6 +141,16 @@ function App() {
           <PortfolioBuilder
             selectedAssets={selectedAssets}
             onAssetsChange={setSelectedAssets}
+          />
+        );
+      case 'optimizer':
+        return (
+          <Optimizer
+            returnData={returnData}
+            onApplyWeights={(assets) => {
+              setSelectedAssets(assets);
+              setActiveTab('portfolio');
+            }}
           />
         );
       case 'settings':
