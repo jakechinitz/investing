@@ -26,7 +26,6 @@ function SimulatePage({
   simResults,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
   const [leverageAcknowledged, setLeverageAcknowledged] = useState({});
 
   const activePortfolio = portfolios.find((p) => p.id === activePortfolioId) || portfolios[0];
@@ -388,28 +387,10 @@ function SimulatePage({
         </div>
       </div>
 
-      {/* ─── Settings (Collapsible) ─── */}
+      {/* ─── Simulation Settings ─── */}
       <div className="config-block" style={{ marginBottom: 'var(--space-lg)' }}>
-        <div
-          className="config-block-title"
-          style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-          onClick={() => setShowSettings(!showSettings)}
-        >
-          <span>Simulation Settings</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            {simConfig.mode === 'simulated'
-              ? `Simulated (${simConfig.nPaths} paths, ${simConfig.nYears}yr)`
-              : simConfig.mode === 'actual'
-              ? 'Actual (Historical)'
-              : simConfig.mode === 'bootstrap'
-              ? `Bootstrap MC (${simConfig.nPaths} paths, ${simConfig.nYears}yr)`
-              : 'Hybrid'}
-            {' '}{showSettings ? '\u25B4' : '\u25BE'}
-          </span>
-        </div>
-
-        {showSettings && (
-          <div style={{ marginTop: 'var(--space-md)' }}>
+        <div className="config-block-title">Simulation Settings</div>
+        <div style={{ marginTop: 'var(--space-md)' }}>
             <div className="config-grid">
               <div>
                 <div className="config-row">
@@ -516,7 +497,6 @@ function SimulatePage({
               )}
             </div>
           </div>
-        )}
       </div>
 
       {/* ─── Leverage Acknowledgment ─── */}
@@ -786,9 +766,9 @@ function MonteCarloDetail({ name, results, color, showHeader }) {
       <div className="chart-container">
         <div className="chart-title">Portfolio Growth - Percentile Fan Chart</div>
         <div className="chart-legend">
-          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.15)' }} /> 5th-95th</div>
-          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.25)' }} /> 10th-90th</div>
-          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.4)' }} /> 25th-75th</div>
+          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.25)' }} /> 5th-95th</div>
+          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.40)' }} /> 10th-90th</div>
+          <div className="legend-item"><div className="legend-dot" style={{ background: 'rgba(29,155,240,0.60)' }} /> 25th-75th</div>
           <div className="legend-item"><div className="legend-dot" style={{ background: color, width: 16, height: 2, borderRadius: 1 }} /> Median</div>
         </div>
         <ResponsiveContainer width="100%" height={400}>
@@ -813,13 +793,13 @@ function MonteCarloDetail({ name, results, color, showHeader }) {
             }} />
             <ReferenceLine y={1} stroke="rgba(0,0,0,0.2)" strokeDasharray="3 3" />
             <Area type="monotone" dataKey="base" stackId="fan" fill="transparent" stroke="none" />
-            <Area type="monotone" dataKey="band_5_10" stackId="fan" fill="rgba(29,155,240,0.08)" stroke="none" />
-            <Area type="monotone" dataKey="band_10_25" stackId="fan" fill="rgba(29,155,240,0.13)" stroke="none" />
-            <Area type="monotone" dataKey="band_25_50" stackId="fan" fill="rgba(29,155,240,0.22)" stroke="none" />
-            <Area type="monotone" dataKey="band_50_75" stackId="fan" fill="rgba(29,155,240,0.22)" stroke="none" />
-            <Area type="monotone" dataKey="band_75_90" stackId="fan" fill="rgba(29,155,240,0.13)" stroke="none" />
-            <Area type="monotone" dataKey="band_90_95" stackId="fan" fill="rgba(29,155,240,0.08)" stroke="none" />
-            <Line type="monotone" dataKey="p50" stroke={color} strokeWidth={2} dot={false} />
+            <Area type="monotone" dataKey="band_5_10" stackId="fan" fill="rgba(29,155,240,0.15)" stroke="none" />
+            <Area type="monotone" dataKey="band_10_25" stackId="fan" fill="rgba(29,155,240,0.20)" stroke="none" />
+            <Area type="monotone" dataKey="band_25_50" stackId="fan" fill="rgba(29,155,240,0.30)" stroke="none" />
+            <Area type="monotone" dataKey="band_50_75" stackId="fan" fill="rgba(29,155,240,0.30)" stroke="none" />
+            <Area type="monotone" dataKey="band_75_90" stackId="fan" fill="rgba(29,155,240,0.20)" stroke="none" />
+            <Area type="monotone" dataKey="band_90_95" stackId="fan" fill="rgba(29,155,240,0.15)" stroke="none" />
+            <Line type="monotone" dataKey="p50" stroke={color} strokeWidth={2.5} dot={false} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
