@@ -278,6 +278,8 @@ function getBlendedCrisisParams(regimeWeights) {
  * @param {number} config.seed - Random seed (default 42)
  * @returns {Object} results
  */
+const REBAL_PERIODS = { monthly: 1, quarterly: 3, semiannual: 6, annual: 12 };
+
 export function runMonteCarlo(config) {
   const {
     assets,
@@ -285,6 +287,7 @@ export function runMonteCarlo(config) {
     nYears = 20,
     regimeWeights = { standard: 1.0, inflation: 0.0, liquidity: 0.0 },
     seed = 42,
+    rebalanceFreq = 'monthly',
   } = config;
 
   const rng = mulberry32(seed);
@@ -330,6 +333,8 @@ export function runMonteCarlo(config) {
     sortino: new Float64Array(nPaths),
   };
 
+  const rebalPeriod = REBAL_PERIODS[rebalanceFreq] || 1;
+
   for (let p = 0; p < nPaths; p++) {
     const path = new Float64Array(nMonths + 1);
     path[0] = 1.0;
@@ -344,11 +349,19 @@ export function runMonteCarlo(config) {
 
     let crisisTimer = 0;
 
+    // Rebalance tracking: cumulative growth per asset since last rebalance
+    let assetCumGrowth = assets.map(() => 1.0);
+
     for (let m = 0; m < nMonths; m++) {
       if (path[m] <= 0) {
         path[m] = 0;
         for (let rm = m; rm <= nMonths; rm++) path[rm] = 0;
         break;
+      }
+
+      // Rebalance: reset drift weights to target
+      if (rebalPeriod <= 1 || m === 0 || m % rebalPeriod === 0) {
+        assetCumGrowth = assets.map(() => 1.0);
       }
 
       const inCrisis = crisisTimer > 0;
@@ -373,7 +386,6 @@ export function runMonteCarlo(config) {
 
       // Compute base class returns
       const baseReturns = {};
-      const cashIdx = baseClasses.indexOf('cash');
       const cashRate = inCrisis ? crisisParams.cashRate : BASE_CLASSES.cash.mu;
       const cashReturn = cashRate * dt;
 
@@ -430,49 +442,69 @@ export function runMonteCarlo(config) {
         crisisTimer--;
       }
 
-      // Compute portfolio asset returns from base class returns
-      let portReturn = 0;
-      for (const asset of assets) {
+      // Compute per-asset returns from base class returns
+      const assetReturns = [];
+      for (let ai = 0; ai < assets.length; ai++) {
+        const asset = assets[ai];
         let assetReturn;
 
-        if (asset.leverage && asset.leverage > 1 && asset.underlying) {
-          // Leveraged product
+        if (asset.leverage && asset.leverage !== 0 && asset.underlying) {
+          const lev = Math.abs(asset.leverage);
+          const sign = asset.leverage > 0 ? 1 : -1;
           const underlyingRet = baseReturns[asset.underlying] || 0;
           const underlyingVol = currentVols[baseClasses.indexOf(asset.underlying)] || 0;
-          const betaSlippage = asset.leverage * underlyingVol * underlyingVol;
+          const betaSlippage = lev * underlyingVol * underlyingVol;
           assetReturn =
-            asset.leverage * underlyingRet -
-            (asset.leverage - 1) * cashReturn -
+            sign * lev * underlyingRet -
+            (lev - 1) * cashReturn -
             (asset.expenseRatio || 0) * dt -
             betaSlippage;
         } else if (asset.stackedComponents && asset.stackedComponents.length >= 2) {
-          // Stacked product (e.g., RSST = equity + trend overlay)
           assetReturn = -cashReturn - (asset.expenseRatio || 0) * dt;
           for (const comp of asset.stackedComponents) {
             assetReturn += baseReturns[comp] || 0;
           }
         } else if (asset.baseClass) {
-          // Simple base class asset
           assetReturn = (baseReturns[asset.baseClass] || 0) - (asset.expenseRatio || 0) * dt;
         } else {
           assetReturn = 0;
         }
 
         assetReturn = Math.max(assetReturn, -0.99);
-        portReturn += (asset.weight / 100) * assetReturn;
+        assetReturns.push(assetReturn);
       }
 
-      // Adjust for portfolio-level leverage or cash allocation
+      // Compute portfolio return using effective (drifted) weights
+      let portReturn = 0;
+      let totalDrifted = 0;
+      for (let ai = 0; ai < assets.length; ai++) {
+        totalDrifted += (assets[ai].weight / 100) * assetCumGrowth[ai];
+      }
+      if (totalDrifted > 0) {
+        for (let ai = 0; ai < assets.length; ai++) {
+          const effWeight = (assets[ai].weight / 100) * assetCumGrowth[ai] / totalDrifted;
+          portReturn += effWeight * assetReturns[ai];
+        }
+      }
+      // Scale by target leverage/cash factor
+      portReturn *= (weightFraction > 0 ? weightFraction : 1);
+
+      // Adjust for leverage borrowing or cash allocation
       if (weightFraction > 1.001) {
-        // Over-allocated: charge borrowing cost on the excess
         portReturn -= (weightFraction - 1) * cashReturn;
       } else if (weightFraction < 0.999 && weightFraction > 0) {
-        // Under-allocated: remainder earns cash return
         portReturn += (1 - weightFraction) * cashReturn;
       }
 
       path[m + 1] = Math.max(0, path[m] * (1 + portReturn));
       portMonthlyRets[m] = portReturn;
+
+      // Update drift tracking
+      if (rebalPeriod > 1) {
+        for (let ai = 0; ai < assets.length; ai++) {
+          assetCumGrowth[ai] *= (1 + assetReturns[ai]);
+        }
+      }
     }
 
     allPaths[p] = path;
@@ -613,7 +645,7 @@ function computePercentilePaths(allPaths, nMonths) {
  * @returns {Object} backtest results
  */
 export function runBacktest(config) {
-  const { assets, returnData, fillMissing = false, regimeWeights } = config;
+  const { assets, returnData, fillMissing = false, regimeWeights, rebalanceFreq = 'monthly' } = config;
 
   // Find the common date range
   let allDates = new Set();
@@ -684,41 +716,69 @@ export function runBacktest(config) {
     };
   }
 
+  const rebalPeriod = REBAL_PERIODS[rebalanceFreq] || 1;
+  let assetCumGrowth = assets.map(() => 1.0);
+
   for (let m = 0; m < nMonths; m++) {
     const date = dates[m];
-    let portReturn = 0;
 
+    // Rebalance at target intervals
+    if (rebalPeriod <= 1 || m === 0 || m % rebalPeriod === 0) {
+      assetCumGrowth = assets.map(() => 1.0);
+    }
+
+    // Compute per-asset returns
+    const assetReturns = [];
     for (const asset of assets) {
       const data = returnData[asset.ticker];
-      if (!data) continue;
-
-      const dateIdx = data.dates.indexOf(date);
       let assetReturn;
 
-      if (dateIdx >= 0) {
-        assetReturn = data.returns[dateIdx];
-      } else if (fillMissing) {
-        // Simulate return based on available data from other assets
-        assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights);
+      if (data) {
+        const dateIdx = data.dates.indexOf(date);
+        if (dateIdx >= 0) {
+          assetReturn = data.returns[dateIdx];
+        } else if (fillMissing) {
+          assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights);
+        } else {
+          assetReturn = 0;
+        }
       } else {
         assetReturn = 0;
       }
-
-      portReturn += (asset.weight / 100) * assetReturn;
+      assetReturns.push(assetReturn);
     }
+
+    // Compute portfolio return using effective (drifted) weights
+    let portReturn = 0;
+    let totalDrifted = 0;
+    for (let ai = 0; ai < assets.length; ai++) {
+      totalDrifted += (assets[ai].weight / 100) * assetCumGrowth[ai];
+    }
+    if (totalDrifted > 0) {
+      for (let ai = 0; ai < assets.length; ai++) {
+        const effWeight = (assets[ai].weight / 100) * assetCumGrowth[ai] / totalDrifted;
+        portReturn += effWeight * assetReturns[ai];
+      }
+    }
+    portReturn *= (weightFraction > 0 ? weightFraction : 1);
 
     // Adjust for portfolio-level leverage or cash allocation
     const monthlyCashReturn = getHistoricalCashRate(date) / 12;
     if (weightFraction > 1.001) {
-      // Over-allocated: charge historical borrowing cost on the excess
       portReturn -= (weightFraction - 1) * monthlyCashReturn;
     } else if (weightFraction < 0.999 && weightFraction > 0) {
-      // Under-allocated: remainder earns cash return
       portReturn += (1 - weightFraction) * monthlyCashReturn;
     }
 
     path[m + 1] = Math.max(0, path[m] * (1 + portReturn));
     monthlyRets[m] = portReturn;
+
+    // Update drift tracking
+    if (rebalPeriod > 1) {
+      for (let ai = 0; ai < assets.length; ai++) {
+        assetCumGrowth[ai] *= (1 + assetReturns[ai]);
+      }
+    }
   }
 
   const nYears = nMonths / 12;
@@ -730,11 +790,28 @@ export function runBacktest(config) {
   const downside = excess.filter((e) => e < 0);
   const stdDownside = stddev(downside);
 
+  // Compute a start date that sorts before all data dates
+  const firstDate = dates[0]; // e.g. '2000-02-01'
+  const startDateObj = new Date(firstDate);
+  startDateObj.setMonth(startDateObj.getMonth() - 1);
+  const startDateStr = startDateObj.toISOString().slice(0, 10);
+
+  // Track which dates used simulated (filled) data
+  const simulatedDateFlags = fillMissing ? dates.map((date) => {
+    for (const asset of assets) {
+      const data = returnData[asset.ticker];
+      if (!data) continue;
+      if (!data.dates.includes(date)) return true;
+    }
+    return false;
+  }) : null;
+
   return {
     path: Array.from(path),
-    dates: ['Start', ...dates],
+    dates: [startDateStr, ...dates],
     monthlyReturns: Array.from(monthlyRets),
     dataAvailability,
+    simulatedDateFlags: simulatedDateFlags ? [false, ...simulatedDateFlags] : null,
     stats: {
       cagr: nYears > 0 && finalMult > 0 ? (Math.pow(finalMult, 1 / nYears) - 1) * 100 : -100,
       vol: stddev(monthlyRets) * Math.sqrt(12) * 100,
