@@ -27,11 +27,43 @@ function SimulatePage({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [leverageAcknowledged, setLeverageAcknowledged] = useState({});
 
   const activePortfolio = portfolios.find((p) => p.id === activePortfolioId) || portfolios[0];
   const selectedAssets = activePortfolio?.assets || [];
   const selectedIds = new Set(selectedAssets.map((a) => a.id));
   const totalWeight = selectedAssets.reduce((sum, a) => sum + a.weight, 0);
+
+  // Compute leverage info per portfolio
+  const portfolioLeverageInfo = useMemo(() => {
+    const info = {};
+    for (const p of portfolios) {
+      const tw = p.assets.reduce((sum, a) => sum + a.weight, 0);
+      const hasAssets = p.assets.length > 0 && p.assets.some((a) => a.weight > 0);
+      if (!hasAssets) {
+        info[p.id] = { totalWeight: 0, isLeveraged: false, isUnderAllocated: false, leveragePct: 0, cashPct: 0 };
+      } else if (tw > 100.1) {
+        info[p.id] = { totalWeight: tw, isLeveraged: true, isUnderAllocated: false, leveragePct: tw - 100, cashPct: 0 };
+      } else if (tw < 99.9) {
+        info[p.id] = { totalWeight: tw, isLeveraged: false, isUnderAllocated: true, leveragePct: 0, cashPct: 100 - tw };
+      } else {
+        info[p.id] = { totalWeight: tw, isLeveraged: false, isUnderAllocated: false, leveragePct: 0, cashPct: 0 };
+      }
+    }
+    return info;
+  }, [portfolios]);
+
+  // Check if any leveraged portfolio lacks acknowledgment
+  const leveragedPortfoliosNeedingAck = useMemo(() => {
+    return portfolios.filter((p) => {
+      const info = portfolioLeverageInfo[p.id];
+      return info?.isLeveraged && !leverageAcknowledged[p.id];
+    });
+  }, [portfolios, portfolioLeverageInfo, leverageAcknowledged]);
+
+  const toggleLeverageAck = (portfolioId) => {
+    setLeverageAcknowledged((prev) => ({ ...prev, [portfolioId]: !prev[portfolioId] }));
+  };
 
   const filteredAssets = useMemo(() => searchAssets(searchQuery), [searchQuery]);
   const groupedAssets = useMemo(() => {
@@ -163,36 +195,49 @@ function SimulatePage({
 
       {/* ─── Portfolio Tabs ─── */}
       <div className="portfolio-tabs-bar">
-        {portfolios.map((p) => (
-          <div
-            key={p.id}
-            className={`portfolio-tab ${p.id === activePortfolioId ? 'active' : ''}`}
-          >
-            <button
-              className="portfolio-tab-btn"
-              onClick={() => onActivePortfolioChange(p.id)}
-              style={{ color: PORTFOLIO_COLORS[(p.id - 1) % PORTFOLIO_COLORS.length] }}
+        {portfolios.map((p) => {
+          const levInfo = portfolioLeverageInfo[p.id];
+          return (
+            <div
+              key={p.id}
+              className={`portfolio-tab ${p.id === activePortfolioId ? 'active' : ''}`}
             >
-              <span
-                className="portfolio-tab-dot"
-                style={{ background: PORTFOLIO_COLORS[(p.id - 1) % PORTFOLIO_COLORS.length] }}
-              />
-              {p.name}
-              {p.assets.length > 0 && (
-                <span className="portfolio-tab-count">{p.assets.length}</span>
-              )}
-            </button>
-            {portfolios.length > 1 && (
               <button
-                className="portfolio-tab-remove"
-                onClick={(e) => { e.stopPropagation(); removePortfolio(p.id); }}
-                title="Remove portfolio"
+                className="portfolio-tab-btn"
+                onClick={() => onActivePortfolioChange(p.id)}
+                style={{ color: PORTFOLIO_COLORS[(p.id - 1) % PORTFOLIO_COLORS.length] }}
               >
-                &times;
+                <span
+                  className="portfolio-tab-dot"
+                  style={{ background: PORTFOLIO_COLORS[(p.id - 1) % PORTFOLIO_COLORS.length] }}
+                />
+                {p.name}
+                {p.assets.length > 0 && (
+                  <span className="portfolio-tab-count">{p.assets.length}</span>
+                )}
               </button>
-            )}
-          </div>
-        ))}
+              {levInfo?.isLeveraged && (
+                <span className="portfolio-tab-leverage" title={`${levInfo.totalWeight.toFixed(1)}% total allocation = ${levInfo.leveragePct.toFixed(1)}% leverage`}>
+                  {levInfo.leveragePct.toFixed(0)}% lev
+                </span>
+              )}
+              {levInfo?.isUnderAllocated && (
+                <span className="portfolio-tab-cash" title={`${levInfo.totalWeight.toFixed(1)}% allocated, ${levInfo.cashPct.toFixed(1)}% defaults to cash`}>
+                  {levInfo.cashPct.toFixed(0)}% cash
+                </span>
+              )}
+              {portfolios.length > 1 && (
+                <button
+                  className="portfolio-tab-remove"
+                  onClick={(e) => { e.stopPropagation(); removePortfolio(p.id); }}
+                  title="Remove portfolio"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+          );
+        })}
         {portfolios.length < MAX_PORTFOLIOS && (
           <button className="portfolio-tab-add" onClick={addPortfolio}>
             + Add Portfolio
@@ -474,11 +519,37 @@ function SimulatePage({
         )}
       </div>
 
+      {/* ─── Leverage Acknowledgment ─── */}
+      {leveragedPortfoliosNeedingAck.length > 0 && (
+        <div className="leverage-ack-block">
+          <div className="leverage-ack-title">Leverage Confirmation Required</div>
+          <p className="leverage-ack-desc">
+            The following portfolio(s) have allocations exceeding 100%, implying margin leverage.
+            Leveraged returns will include a borrowing cost (cash rate on the excess allocation).
+          </p>
+          {leveragedPortfoliosNeedingAck.map((p) => {
+            const levInfo = portfolioLeverageInfo[p.id];
+            return (
+              <label key={p.id} className="leverage-ack-checkbox">
+                <input
+                  type="checkbox"
+                  checked={!!leverageAcknowledged[p.id]}
+                  onChange={() => toggleLeverageAck(p.id)}
+                />
+                <span>
+                  <strong>{p.name}</strong> &mdash; {levInfo.totalWeight.toFixed(1)}% allocated ({levInfo.leveragePct.toFixed(1)}% leverage)
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+
       {/* ─── Run Button ─── */}
       <button
         className={`run-button ${isSimulating ? 'running' : ''}`}
         onClick={onRunSimulation}
-        disabled={!anyPortfolioHasAssets || isSimulating}
+        disabled={!anyPortfolioHasAssets || isSimulating || leveragedPortfoliosNeedingAck.length > 0}
         style={{ marginBottom: 'var(--space-xl)' }}
       >
         {isSimulating ? (
@@ -486,6 +557,8 @@ function SimulatePage({
             <span className="spinner" style={{ borderTopColor: 'white', borderColor: 'rgba(255,255,255,0.3)' }} />
             Running Simulation...
           </span>
+        ) : leveragedPortfoliosNeedingAck.length > 0 ? (
+          'Acknowledge Leverage to Run Simulation'
         ) : simConfig.mode === 'simulated' ? (
           `Run Monte Carlo (${simConfig.nPaths} paths, ${simConfig.nYears}yr) for ${portfolios.filter((p) => p.assets.length > 0).length} Portfolio(s)`
         ) : simConfig.mode === 'actual' ? (
