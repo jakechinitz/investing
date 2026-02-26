@@ -58,15 +58,24 @@ function App() {
     fetchAll();
   }, []);
 
-  // Header stats (from most recent simulation of the active portfolio)
+  // Clear results when simulation mode changes to avoid format mismatch crashes
+  const prevModeRef = useRef(simConfig.mode);
+  useEffect(() => {
+    if (prevModeRef.current !== simConfig.mode) {
+      setSimResults({});
+      prevModeRef.current = simConfig.mode;
+    }
+  }, [simConfig.mode]);
+
+  // Header stats - detect result format from actual data, not config mode
   const activeResults = simResults[activePortfolioId];
   const headerStats = activeResults && !activeResults.error
-    ? simConfig.mode === 'simulated' || simConfig.mode === 'bootstrap'
+    ? activeResults.summary
       ? {
-          cagr: activeResults.summary?.cagr?.median,
-          vol: activeResults.summary?.vol?.median,
-          maxDD: activeResults.summary?.maxDD?.median,
-          sharpe: activeResults.summary?.sharpe?.median,
+          cagr: activeResults.summary.cagr?.median,
+          vol: activeResults.summary.vol?.median,
+          maxDD: activeResults.summary.maxDD?.median,
+          sharpe: activeResults.summary.sharpe?.median,
         }
       : activeResults.stats
         ? {
