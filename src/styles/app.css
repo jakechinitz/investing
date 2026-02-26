@@ -737,6 +737,110 @@
   border-width: 2px;
 }
 
+/* ─── Portfolio Tabs Bar ─── */
+.portfolio-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-sm) 0;
+  margin-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-color-light);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.portfolio-tabs-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.portfolio-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.portfolio-tab.active {
+  background: var(--bg-tertiary);
+}
+
+.portfolio-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.portfolio-tab.active .portfolio-tab-btn {
+  font-weight: 700;
+}
+
+.portfolio-tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.portfolio-tab-count {
+  font-size: 0.625rem;
+  background: var(--bg-tertiary);
+  padding: 1px 5px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.portfolio-tab-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.875rem;
+  line-height: 1;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+}
+
+.portfolio-tab-remove:hover {
+  color: var(--accent-danger);
+  background: rgba(244, 33, 46, 0.06);
+}
+
+.portfolio-tab-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-color-light);
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.portfolio-tab-add:hover {
+  color: var(--text-primary);
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
+}
+
 /* ─── Responsive ─── */
 @media (max-width: 1024px) {
   .sidebar {

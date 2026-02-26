@@ -58,12 +58,16 @@ const NORMAL_CORR_MATRIX = (() => {
   return m;
 })();
 
+function getAssetClasses(asset) {
+  if (asset.baseClass && !asset.leverage && !asset.stackedComponents) return [asset.baseClass];
+  if (asset.leverage && asset.underlying) return [asset.underlying];
+  if (asset.stackedComponents && asset.stackedComponents.length > 0) return [...asset.stackedComponents];
+  if (asset.baseClass) return [asset.baseClass];
+  return ['us_equity'];
+}
+
 function getPrimaryClass(asset) {
-  if (asset.baseClass) return asset.baseClass;
-  if (asset.underlying) return asset.underlying;
-  if (asset.stackedComponents && asset.stackedComponents.length > 0)
-    return asset.stackedComponents[0];
-  return 'us_equity';
+  return getAssetClasses(asset)[0];
 }
 
 export function getEffectiveParams(asset) {
@@ -123,6 +127,31 @@ function getClassCorrelation(classA, classB) {
 
 // ─── Build Covariance Matrix (Simulated Mode) ───
 
+// Compute covariance between two assets accounting for stacking and leverage
+function computeAssetCovariance(assetI, assetJ) {
+  const classesI = getAssetClasses(assetI);
+  const classesJ = getAssetClasses(assetJ);
+
+  // For stacked products: Cov(A+B, C+D) = Cov(A,C) + Cov(A,D) + Cov(B,C) + Cov(B,D)
+  // For leveraged: Cov(L*A, B) = L * Cov(A, B)
+  const leverageI = (assetI.leverage && assetI.leverage > 1) ? assetI.leverage : 1;
+  const leverageJ = (assetJ.leverage && assetJ.leverage > 1) ? assetJ.leverage : 1;
+
+  let totalCov = 0;
+  for (const ci of classesI) {
+    const bcI = BASE_CLASSES[ci];
+    if (!bcI) continue;
+    for (const cj of classesJ) {
+      const bcJ = BASE_CLASSES[cj];
+      if (!bcJ) continue;
+      const corr = getClassCorrelation(ci, cj);
+      totalCov += corr * bcI.sigma * bcJ.sigma;
+    }
+  }
+
+  return totalCov * leverageI * leverageJ;
+}
+
 function buildSimCovMatrix(assets) {
   const n = assets.length;
   const params = assets.map(getEffectiveParams);
@@ -130,10 +159,7 @@ function buildSimCovMatrix(assets) {
 
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
-      const classI = getPrimaryClass(assets[i]);
-      const classJ = getPrimaryClass(assets[j]);
-      const corr = getClassCorrelation(classI, classJ);
-      cov[i][j] = corr * params[i].sigma * params[j].sigma;
+      cov[i][j] = computeAssetCovariance(assets[i], assets[j]);
     }
   }
   return { means: params.map((p) => p.mu), cov };
