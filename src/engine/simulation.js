@@ -82,22 +82,23 @@ function cholesky(matrix) {
 }
 
 // ─── Base Asset Class Definitions ───
-// These define the statistical properties for simulation
+// mu = arithmetic expected return (must exceed target CAGR by ~sigma²/2 + crisis drag)
+// Historical CAGR targets: SPY ~10%, QQQ ~12%, bonds ~4%, gold ~6%
 const BASE_CLASSES = {
-  us_equity: { mu: 0.10, sigma: 0.16, dfT: 8, crisisVol: 0.35, clusterMult: 1.2, clusterCap: 2.0 },
-  us_tech: { mu: 0.12, sigma: 0.20, dfT: 7, crisisVol: 0.40, clusterMult: 1.2, clusterCap: 2.0 },
-  us_small_cap: { mu: 0.11, sigma: 0.20, dfT: 7, crisisVol: 0.38, clusterMult: 1.2, clusterCap: 2.0 },
-  intl_developed: { mu: 0.08, sigma: 0.17, dfT: 8, crisisVol: 0.30, clusterMult: 1.15, clusterCap: 1.8 },
-  intl_emerging: { mu: 0.09, sigma: 0.22, dfT: 6, crisisVol: 0.38, clusterMult: 1.2, clusterCap: 2.0 },
-  us_aggregate_bond: { mu: 0.04, sigma: 0.06, dfT: 20, crisisVol: 0.10, clusterMult: 1.05, clusterCap: 1.5 },
-  us_long_treasury: { mu: 0.04, sigma: 0.15, dfT: 15, crisisVol: 0.22, clusterMult: 1.1, clusterCap: 1.8 },
-  tips: { mu: 0.035, sigma: 0.06, dfT: 20, crisisVol: 0.09, clusterMult: 1.05, clusterCap: 1.5 },
-  gold: { mu: 0.05, sigma: 0.15, dfT: 10, crisisVol: 0.22, clusterMult: 1.1, clusterCap: 1.6 },
-  commodities: { mu: 0.03, sigma: 0.18, dfT: 7, crisisVol: 0.30, clusterMult: 1.15, clusterCap: 1.8 },
-  real_estate: { mu: 0.08, sigma: 0.20, dfT: 8, crisisVol: 0.35, clusterMult: 1.2, clusterCap: 2.0 },
-  crypto_major: { mu: 0.15, sigma: 0.60, dfT: 5, crisisVol: 0.85, clusterMult: 1.25, clusterCap: 2.5 },
-  crypto_alt: { mu: 0.12, sigma: 0.75, dfT: 4, crisisVol: 1.0, clusterMult: 1.3, clusterCap: 2.5 },
-  managed_futures: { mu: 0.05, sigma: 0.12, dfT: 15, crisisVol: 0.18, clusterMult: 1.05, clusterCap: 1.5 },
+  us_equity: { mu: 0.115, sigma: 0.16, dfT: 8, crisisVol: 0.28, clusterMult: 1.15, clusterCap: 1.8 },
+  us_tech: { mu: 0.14, sigma: 0.20, dfT: 7, crisisVol: 0.34, clusterMult: 1.15, clusterCap: 1.8 },
+  us_small_cap: { mu: 0.13, sigma: 0.20, dfT: 7, crisisVol: 0.32, clusterMult: 1.15, clusterCap: 1.8 },
+  intl_developed: { mu: 0.095, sigma: 0.17, dfT: 8, crisisVol: 0.26, clusterMult: 1.1, clusterCap: 1.6 },
+  intl_emerging: { mu: 0.11, sigma: 0.22, dfT: 6, crisisVol: 0.32, clusterMult: 1.15, clusterCap: 1.8 },
+  us_aggregate_bond: { mu: 0.045, sigma: 0.06, dfT: 20, crisisVol: 0.09, clusterMult: 1.05, clusterCap: 1.4 },
+  us_long_treasury: { mu: 0.05, sigma: 0.15, dfT: 15, crisisVol: 0.20, clusterMult: 1.08, clusterCap: 1.6 },
+  tips: { mu: 0.04, sigma: 0.06, dfT: 20, crisisVol: 0.08, clusterMult: 1.05, clusterCap: 1.4 },
+  gold: { mu: 0.065, sigma: 0.15, dfT: 10, crisisVol: 0.20, clusterMult: 1.08, clusterCap: 1.5 },
+  commodities: { mu: 0.045, sigma: 0.18, dfT: 7, crisisVol: 0.26, clusterMult: 1.1, clusterCap: 1.6 },
+  real_estate: { mu: 0.10, sigma: 0.20, dfT: 8, crisisVol: 0.28, clusterMult: 1.15, clusterCap: 1.8 },
+  crypto_major: { mu: 0.25, sigma: 0.60, dfT: 5, crisisVol: 0.80, clusterMult: 1.2, clusterCap: 2.0 },
+  crypto_alt: { mu: 0.20, sigma: 0.75, dfT: 4, crisisVol: 0.90, clusterMult: 1.2, clusterCap: 2.0 },
+  managed_futures: { mu: 0.06, sigma: 0.12, dfT: 15, crisisVol: 0.16, clusterMult: 1.05, clusterCap: 1.4 },
   cash: { mu: 0.04, sigma: 0.005, dfT: null, crisisVol: 0.005, clusterMult: 1.0, clusterCap: 1.0 },
 };
 
@@ -405,26 +406,26 @@ export function runMonteCarlo(config) {
         baseReturns[className] = ret;
 
         // Volatility clustering
-        if (ret < -0.08) {
+        if (ret < -0.10) {
           currentVols[i] = Math.min(
             currentVols[i] * bc.clusterMult,
             bc.sigma * Math.sqrt(dt) * bc.clusterCap
           );
         } else {
-          currentVols[i] = currentVols[i] * 0.9 + bc.sigma * Math.sqrt(dt) * 0.1;
+          currentVols[i] = currentVols[i] * 0.85 + bc.sigma * Math.sqrt(dt) * 0.15;
         }
       }
 
-      // Crisis detection: any equity class drops > 8%
+      // Crisis detection: any equity class drops > 10% in a month
       let equityCrash = false;
       for (const cls of baseClasses) {
-        if (isEquityClass(cls) && baseReturns[cls] < -0.08) {
+        if (isEquityClass(cls) && baseReturns[cls] < -0.10) {
           equityCrash = true;
           break;
         }
       }
       if (equityCrash) {
-        crisisTimer = 12;
+        crisisTimer = 6;
       } else if (crisisTimer > 0) {
         crisisTimer--;
       }
