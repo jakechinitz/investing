@@ -577,18 +577,14 @@ function SimulatePage({
       )}
 
       {/* ─── Results ─── */}
-      {hasResults && <ResultsSection resultsArray={resultsArray} simConfig={simConfig} />}
+      {hasResults && <ResultsSection resultsArray={resultsArray} />}
     </div>
   );
 }
 
 // ─── Results Section ───
 
-function ResultsSection({ resultsArray, simConfig }) {
-  const isBacktest = simConfig.mode === 'actual' || simConfig.mode === 'hybrid';
-  const isBootstrap = simConfig.mode === 'bootstrap';
-  const isMonteCarlo = simConfig.mode === 'simulated' || isBootstrap;
-
+function ResultsSection({ resultsArray }) {
   if (resultsArray.length === 0) return null;
 
   // Check for errors
@@ -601,11 +597,19 @@ function ResultsSection({ resultsArray, simConfig }) {
     );
   }
 
-  if (isMonteCarlo) {
-    return <MonteCarloComparison resultsArray={resultsArray} isBootstrap={isBootstrap} />;
+  // Detect result format from actual data (not config mode) to avoid
+  // crash when mode is toggled while old results are still displayed
+  const firstResult = resultsArray[0]?.results;
+  if (!firstResult) return null;
+
+  const isMCResult = firstResult.summary && firstResult.percentilePaths;
+  const isBacktestResult = firstResult.stats && firstResult.path;
+
+  if (isMCResult) {
+    return <MonteCarloComparison resultsArray={resultsArray} isBootstrap={!!firstResult.blockSize} />;
   }
 
-  if (isBacktest) {
+  if (isBacktestResult) {
     return <BacktestComparison resultsArray={resultsArray} />;
   }
 
