@@ -764,5 +764,160 @@ function simulateMissingReturn(asset, date, allAssets, returnData, regimeWeights
   return expectedReturn + conditionalShift * vol;
 }
 
+// ─── Bootstrap Monte Carlo ───
+
+/**
+ * Run block-bootstrap Monte Carlo simulation using actual historical data.
+ * Randomly samples contiguous blocks of returns from history to build synthetic paths.
+ *
+ * @param {Object} config
+ * @param {Array<Object>} config.assets - [{id, ticker, weight}]
+ * @param {Object} config.returnData - {ticker: {dates, returns}}
+ * @param {number} config.nPaths - Number of simulation paths (default 1000)
+ * @param {number} config.nYears - Simulation horizon in years (default 20)
+ * @param {number} config.blockSize - Block size in months for bootstrap (default 12)
+ * @param {number} config.seed - Random seed (default 42)
+ * @returns {Object} results (same format as runMonteCarlo)
+ */
+export function runBootstrapMonteCarlo(config) {
+  const {
+    assets,
+    returnData,
+    nPaths = 1000,
+    nYears = 20,
+    blockSize = 12,
+    seed = 42,
+  } = config;
+
+  const rng = mulberry32(seed);
+  const nMonths = nYears * 12;
+
+  // Build aligned return matrix: for each month index, we have the portfolio return
+  // First, find common dates across all assets that have data
+  const allDates = new Set();
+  const assetDateSets = {};
+  for (const asset of assets) {
+    const data = returnData[asset.ticker];
+    if (!data?.dates) continue;
+    assetDateSets[asset.ticker] = new Set(data.dates);
+    for (const d of data.dates) allDates.add(d);
+  }
+
+  const sortedDates = Array.from(allDates).sort();
+
+  // For each date, compute portfolio monthly return
+  // Use the assets that have data at that date
+  const portfolioReturns = [];
+  for (const date of sortedDates) {
+    let portReturn = 0;
+    let totalWeightUsed = 0;
+
+    for (const asset of assets) {
+      const data = returnData[asset.ticker];
+      if (!data?.dates) continue;
+      const dateIdx = data.dates.indexOf(date);
+      if (dateIdx < 0) continue;
+
+      portReturn += (asset.weight / 100) * data.returns[dateIdx];
+      totalWeightUsed += asset.weight;
+    }
+
+    // Scale if not all weights used
+    if (totalWeightUsed > 0 && totalWeightUsed < 100) {
+      portReturn = portReturn * (100 / totalWeightUsed);
+    }
+
+    if (totalWeightUsed > 0) {
+      portfolioReturns.push(portReturn);
+    }
+  }
+
+  const totalHistMonths = portfolioReturns.length;
+  if (totalHistMonths < blockSize) {
+    return { error: `Insufficient historical data: only ${totalHistMonths} months available, need at least ${blockSize}` };
+  }
+
+  // Storage for all paths
+  const allPaths = new Array(nPaths);
+  const allStats = {
+    finalMult: new Float64Array(nPaths),
+    cagr: new Float64Array(nPaths),
+    vol: new Float64Array(nPaths),
+    maxDD: new Float64Array(nPaths),
+    sharpe: new Float64Array(nPaths),
+    sortino: new Float64Array(nPaths),
+  };
+
+  for (let p = 0; p < nPaths; p++) {
+    const path = new Float64Array(nMonths + 1);
+    path[0] = 1.0;
+    const pathMonthlyRets = new Float64Array(nMonths);
+
+    let currentMonth = 0;
+
+    while (currentMonth < nMonths) {
+      // Pick a random start index for this block
+      const maxStart = totalHistMonths - blockSize;
+      const startIdx = Math.floor(rng() * (maxStart + 1));
+
+      for (let b = 0; b < blockSize && currentMonth < nMonths; b++) {
+        const monthRet = portfolioReturns[startIdx + b];
+        path[currentMonth + 1] = Math.max(0, path[currentMonth] * (1 + monthRet));
+        pathMonthlyRets[currentMonth] = monthRet;
+        currentMonth++;
+
+        if (path[currentMonth] <= 0) break;
+      }
+
+      if (path[currentMonth] <= 0) {
+        // Zero out remaining
+        for (let rm = currentMonth + 1; rm <= nMonths; rm++) path[rm] = 0;
+        break;
+      }
+    }
+
+    allPaths[p] = path;
+    const finalMult = path[nMonths];
+    allStats.finalMult[p] = finalMult;
+    allStats.cagr[p] = finalMult > 0 ? (Math.pow(finalMult, 1 / nYears) - 1) * 100 : -100;
+    allStats.maxDD[p] = computeMaxDrawdown(path);
+
+    const rf = 0.04 / 12;
+    const excess = pathMonthlyRets.map((r) => r - rf);
+    const meanExcess = mean(excess);
+    const stdExcess = stddev(excess);
+    const downside = excess.filter((e) => e < 0);
+    const stdDownside = stddev(downside);
+
+    allStats.vol[p] = stddev(pathMonthlyRets) * Math.sqrt(12) * 100;
+    allStats.sharpe[p] = stdExcess > 0 ? (meanExcess / stdExcess) * Math.sqrt(12) : 0;
+    allStats.sortino[p] = stdDownside > 0 ? (meanExcess / stdDownside) * Math.sqrt(12) : 0;
+  }
+
+  // Compute percentile paths
+  const percentilePaths = computePercentilePaths(allPaths, nMonths);
+
+  // Compute summary statistics
+  const summary = {
+    cagr: computeDistStats(allStats.cagr),
+    vol: computeDistStats(allStats.vol),
+    maxDD: computeDistStats(allStats.maxDD),
+    sharpe: computeDistStats(allStats.sharpe),
+    sortino: computeDistStats(allStats.sortino),
+    finalMult: computeDistStats(allStats.finalMult),
+  };
+
+  return {
+    paths: allPaths,
+    percentilePaths,
+    summary,
+    nPaths,
+    nYears,
+    nMonths,
+    histMonthsUsed: totalHistMonths,
+    blockSize,
+  };
+}
+
 // ─── Exports ───
 export { BASE_CLASSES, CLASS_ORDER, CRISIS_REGIMES };

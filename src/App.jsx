@@ -1,21 +1,23 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Header from './components/Header.jsx';
 import Sidebar, { TABS } from './components/Sidebar.jsx';
-import PortfolioBuilder from './components/PortfolioBuilder.jsx';
-import SimulationConfig from './components/SimulationConfig.jsx';
-import ResultsDashboard from './components/ResultsDashboard.jsx';
+import SimulatePage from './components/SimulatePage.jsx';
 import ActualReturnsPanel from './components/ActualReturnsPanel.jsx';
 import Optimizer from './components/Optimizer.jsx';
-import { runMonteCarlo, runBacktest } from './engine/simulation.js';
+import { runMonteCarlo, runBacktest, runBootstrapMonteCarlo } from './engine/simulation.js';
 import { fetchAllReturns } from './data/fetchReturns.js';
+import { ASSETS } from './data/assets.js';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('portfolio');
+  const [activeTab, setActiveTab] = useState('simulate');
   const [isSimulating, setIsSimulating] = useState(false);
   const [isFetchingReturns, setIsFetchingReturns] = useState(false);
 
-  // Portfolio state
-  const [selectedAssets, setSelectedAssets] = useState([]);
+  // Multi-portfolio state
+  const [portfolios, setPortfolios] = useState([
+    { id: 1, name: 'Portfolio 1', assets: [] },
+  ]);
+  const [activePortfolioId, setActivePortfolioId] = useState(1);
 
   // Simulation config
   const [simConfig, setSimConfig] = useState({
@@ -26,103 +28,149 @@ function App() {
     regimeWeights: { standard: 70, inflation: 20, liquidity: 10 },
   });
 
-  // Results
-  const [simResults, setSimResults] = useState(null);
+  // Results: map of portfolioId -> results
+  const [simResults, setSimResults] = useState({});
 
-  // Actual returns data
+  // Actual returns data (shared across everything)
   const [returnData, setReturnData] = useState({});
   const [returnMetadata, setReturnMetadata] = useState({});
   const [returnErrors, setReturnErrors] = useState({});
 
-  // Header stats (from most recent simulation)
-  const headerStats = simResults && !simResults.error
-    ? simConfig.mode === 'simulated'
+  // Auto-fetch historical data for ALL assets on mount
+  const hasFetchedRef = useRef(false);
+  useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
+    const fetchAll = async () => {
+      setIsFetchingReturns(true);
+      try {
+        const { data, metadata, errors } = await fetchAllReturns(ASSETS);
+        setReturnData(data);
+        setReturnMetadata(metadata);
+        setReturnErrors(errors);
+      } catch (err) {
+        console.error('Auto-fetch error:', err);
+      } finally {
+        setIsFetchingReturns(false);
+      }
+    };
+    fetchAll();
+  }, []);
+
+  // Header stats (from most recent simulation of the active portfolio)
+  const activeResults = simResults[activePortfolioId];
+  const headerStats = activeResults && !activeResults.error
+    ? simConfig.mode === 'simulated' || simConfig.mode === 'bootstrap'
       ? {
-          cagr: simResults.summary?.cagr?.median,
-          vol: simResults.summary?.vol?.median,
-          maxDD: simResults.summary?.maxDD?.median,
-          sharpe: simResults.summary?.sharpe?.median,
+          cagr: activeResults.summary?.cagr?.median,
+          vol: activeResults.summary?.vol?.median,
+          maxDD: activeResults.summary?.maxDD?.median,
+          sharpe: activeResults.summary?.sharpe?.median,
         }
-      : simResults.stats
+      : activeResults.stats
         ? {
-            cagr: simResults.stats.cagr,
-            vol: simResults.stats.vol,
-            maxDD: simResults.stats.maxDD,
-            sharpe: simResults.stats.sharpe,
+            cagr: activeResults.stats.cagr,
+            vol: activeResults.stats.vol,
+            maxDD: activeResults.stats.maxDD,
+            sharpe: activeResults.stats.sharpe,
           }
         : null
     : null;
 
-  // ─── Run Simulation ───
+  // ─── Run Simulation for all populated portfolios ───
   const handleRunSimulation = useCallback(async () => {
-    if (selectedAssets.length === 0) return;
-    setIsSimulating(true);
-    setSimResults(null);
+    const populatedPortfolios = portfolios.filter(
+      (p) => p.assets.length > 0 && p.assets.some((a) => a.weight > 0)
+    );
+    if (populatedPortfolios.length === 0) return;
 
-    // Use setTimeout to allow UI to update before heavy computation
+    setIsSimulating(true);
+    setSimResults({});
+
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     try {
-      if (simConfig.mode === 'simulated') {
-        // Normalize regime weights to 0-1
-        const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
-        const normalizedRegimes = {};
-        for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
-          normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
-        }
+      const results = {};
 
-        const results = runMonteCarlo({
-          assets: selectedAssets,
-          nPaths: simConfig.nPaths,
-          nYears: simConfig.nYears,
-          regimeWeights: normalizedRegimes,
-          seed: simConfig.seed,
-        });
-        setSimResults(results);
-      } else {
-        // Actual or Hybrid mode - need to fetch returns first
-        let currentReturnData = returnData;
-        if (Object.keys(currentReturnData).length === 0) {
-          setIsFetchingReturns(true);
-          const { data, metadata, errors } = await fetchAllReturns(selectedAssets);
-          currentReturnData = data;
-          setReturnData(data);
-          setReturnMetadata(metadata);
-          setReturnErrors(errors);
-          setIsFetchingReturns(false);
-        }
+      for (const portfolio of populatedPortfolios) {
+        if (simConfig.mode === 'simulated') {
+          const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
+          const normalizedRegimes = {};
+          for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
+            normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
+          }
 
-        const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
-        const normalizedRegimes = {};
-        for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
-          normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
-        }
+          results[portfolio.id] = runMonteCarlo({
+            assets: portfolio.assets,
+            nPaths: simConfig.nPaths,
+            nYears: simConfig.nYears,
+            regimeWeights: normalizedRegimes,
+            seed: simConfig.seed + portfolio.id - 1,
+          });
+        } else if (simConfig.mode === 'bootstrap') {
+          // Bootstrap Monte Carlo - needs actual return data
+          let currentReturnData = returnData;
+          if (Object.keys(currentReturnData).length === 0) {
+            setIsFetchingReturns(true);
+            const { data, metadata, errors } = await fetchAllReturns(portfolio.assets);
+            currentReturnData = data;
+            setReturnData(data);
+            setReturnMetadata(metadata);
+            setReturnErrors(errors);
+            setIsFetchingReturns(false);
+          }
 
-        const results = runBacktest({
-          assets: selectedAssets,
-          returnData: currentReturnData,
-          fillMissing: simConfig.mode === 'hybrid',
-          regimeWeights: normalizedRegimes,
-        });
-        setSimResults(results);
+          results[portfolio.id] = runBootstrapMonteCarlo({
+            assets: portfolio.assets,
+            returnData: currentReturnData,
+            nPaths: simConfig.nPaths,
+            nYears: simConfig.nYears,
+            blockSize: 12,
+            seed: simConfig.seed + portfolio.id - 1,
+          });
+        } else {
+          // Actual or Hybrid
+          let currentReturnData = returnData;
+          if (Object.keys(currentReturnData).length === 0) {
+            setIsFetchingReturns(true);
+            const { data, metadata, errors } = await fetchAllReturns(portfolio.assets);
+            currentReturnData = data;
+            setReturnData(data);
+            setReturnMetadata(metadata);
+            setReturnErrors(errors);
+            setIsFetchingReturns(false);
+          }
+
+          const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
+          const normalizedRegimes = {};
+          for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
+            normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
+          }
+
+          results[portfolio.id] = runBacktest({
+            assets: portfolio.assets,
+            returnData: currentReturnData,
+            fillMissing: simConfig.mode === 'hybrid',
+            regimeWeights: normalizedRegimes,
+          });
+        }
       }
 
-      setActiveTab('results');
+      setSimResults(results);
     } catch (err) {
       console.error('Simulation error:', err);
-      setSimResults({ error: err.message });
-      setActiveTab('results');
+      setSimResults({ [populatedPortfolios[0].id]: { error: err.message } });
     } finally {
       setIsSimulating(false);
     }
-  }, [selectedAssets, simConfig, returnData]);
+  }, [portfolios, simConfig, returnData]);
 
-  // ─── Fetch Returns ───
+  // ─── Fetch Returns (manual trigger) ───
   const handleFetchReturns = useCallback(async () => {
-    if (selectedAssets.length === 0) return;
     setIsFetchingReturns(true);
     try {
-      const { data, metadata, errors } = await fetchAllReturns(selectedAssets);
+      const { data, metadata, errors } = await fetchAllReturns(ASSETS);
       setReturnData(data);
       setReturnMetadata(metadata);
       setReturnErrors(errors);
@@ -131,49 +179,47 @@ function App() {
     } finally {
       setIsFetchingReturns(false);
     }
-  }, [selectedAssets]);
+  }, []);
+
+  // ─── Apply optimizer weights to a specific portfolio ───
+  const handleApplyWeightsToPortfolio = useCallback((assets, portfolioId) => {
+    setPortfolios((prev) =>
+      prev.map((p) =>
+        p.id === portfolioId ? { ...p, assets } : p
+      )
+    );
+    setActivePortfolioId(portfolioId);
+    setActiveTab('simulate');
+  }, []);
 
   // ─── Render Tab Content ───
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'portfolio':
+      case 'simulate':
         return (
-          <PortfolioBuilder
-            selectedAssets={selectedAssets}
-            onAssetsChange={setSelectedAssets}
+          <SimulatePage
+            portfolios={portfolios}
+            activePortfolioId={activePortfolioId}
+            onPortfoliosChange={setPortfolios}
+            onActivePortfolioChange={setActivePortfolioId}
+            simConfig={simConfig}
+            onConfigChange={setSimConfig}
+            onRunSimulation={handleRunSimulation}
+            isSimulating={isSimulating}
+            simResults={simResults}
           />
         );
       case 'optimizer':
         return (
           <Optimizer
             returnData={returnData}
-            onApplyWeights={(assets) => {
-              setSelectedAssets(assets);
-              setActiveTab('portfolio');
-            }}
-          />
-        );
-      case 'settings':
-        return (
-          <SimulationConfig
-            config={simConfig}
-            onConfigChange={setSimConfig}
-            onRunSimulation={handleRunSimulation}
-            isSimulating={isSimulating}
-            selectedAssets={selectedAssets}
-          />
-        );
-      case 'results':
-        return (
-          <ResultsDashboard
-            results={simResults}
-            mode={simConfig.mode}
+            portfolios={portfolios}
+            onApplyWeightsToPortfolio={handleApplyWeightsToPortfolio}
           />
         );
       case 'historical':
         return (
           <ActualReturnsPanel
-            selectedAssets={selectedAssets}
             returnData={returnData}
             metadata={returnMetadata}
             errors={returnErrors}
