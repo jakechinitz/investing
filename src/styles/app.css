@@ -841,6 +841,72 @@
   background: var(--bg-tertiary);
 }
 
+.portfolio-tab-leverage {
+  font-size: 0.625rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--accent-warning);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.portfolio-tab-cash {
+  font-size: 0.625rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+/* Leverage Acknowledgment Block */
+.leverage-ack-block {
+  background: rgba(245, 158, 11, 0.05);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
+.leverage-ack-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--accent-warning);
+  margin-bottom: var(--space-xs);
+}
+
+.leverage-ack-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-sm);
+  line-height: 1.4;
+}
+
+.leverage-ack-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: var(--space-xs) 0;
+}
+
+.leverage-ack-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-warning);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* ─── Responsive ─── */
 @media (max-width: 1024px) {
   .sidebar {

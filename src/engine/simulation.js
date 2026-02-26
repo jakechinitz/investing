@@ -314,6 +314,10 @@ export function runMonteCarlo(config) {
 
   const N = baseClasses.length;
 
+  // Compute total portfolio weight for leverage/cash handling
+  const totalWeightPct = assets.reduce((sum, a) => sum + a.weight, 0);
+  const weightFraction = totalWeightPct / 100; // e.g., 1.5 for 150% allocation
+
   // Storage for all paths
   const allPaths = new Array(nPaths);
   const allStats = {
@@ -455,6 +459,15 @@ export function runMonteCarlo(config) {
 
         assetReturn = Math.max(assetReturn, -0.99);
         portReturn += (asset.weight / 100) * assetReturn;
+      }
+
+      // Adjust for portfolio-level leverage or cash allocation
+      if (weightFraction > 1.001) {
+        // Over-allocated: charge borrowing cost on the excess
+        portReturn -= (weightFraction - 1) * cashReturn;
+      } else if (weightFraction < 0.999 && weightFraction > 0) {
+        // Under-allocated: remainder earns cash return
+        portReturn += (1 - weightFraction) * cashReturn;
       }
 
       path[m + 1] = Math.max(0, path[m] * (1 + portReturn));
@@ -632,6 +645,24 @@ export function runBacktest(config) {
   const dates = sortedDates.slice(startIdx);
   const nMonths = dates.length;
 
+  // Compute total portfolio weight for leverage/cash handling
+  const totalWeightPct = assets.reduce((sum, a) => sum + a.weight, 0);
+  const weightFraction = totalWeightPct / 100;
+
+  // Historical cash rate approximation (annualized, by era)
+  // We'll use a simple lookup based on date for more realistic borrowing costs
+  const getHistoricalCashRate = (date) => {
+    const year = parseInt(date.substring(0, 4));
+    if (year <= 2001) return 0.05;       // ~5% fed funds 1998-2001
+    if (year <= 2004) return 0.015;      // ~1.5% post dot-com
+    if (year <= 2007) return 0.045;      // ~4.5% pre-GFC
+    if (year <= 2015) return 0.002;      // ~0.2% ZIRP era
+    if (year <= 2018) return 0.02;       // ~2% rate hike cycle
+    if (year <= 2021) return 0.002;      // ~0.2% COVID ZIRP
+    if (year <= 2022) return 0.03;       // ~3% early hike cycle
+    return 0.05;                          // ~5% 2023+
+  };
+
   // Build portfolio path
   const path = new Float64Array(nMonths + 1);
   path[0] = 1.0;
@@ -655,7 +686,6 @@ export function runBacktest(config) {
   for (let m = 0; m < nMonths; m++) {
     const date = dates[m];
     let portReturn = 0;
-    let totalWeightUsed = 0;
 
     for (const asset of assets) {
       const data = returnData[asset.ticker];
@@ -674,12 +704,16 @@ export function runBacktest(config) {
       }
 
       portReturn += (asset.weight / 100) * assetReturn;
-      totalWeightUsed += asset.weight;
     }
 
-    // Scale if not all weight was used
-    if (totalWeightUsed > 0 && totalWeightUsed < 100) {
-      portReturn = portReturn * (100 / totalWeightUsed);
+    // Adjust for portfolio-level leverage or cash allocation
+    const monthlyCashReturn = getHistoricalCashRate(date) / 12;
+    if (weightFraction > 1.001) {
+      // Over-allocated: charge historical borrowing cost on the excess
+      portReturn -= (weightFraction - 1) * monthlyCashReturn;
+    } else if (weightFraction < 0.999 && weightFraction > 0) {
+      // Under-allocated: remainder earns cash return
+      portReturn += (1 - weightFraction) * monthlyCashReturn;
     }
 
     path[m + 1] = Math.max(0, path[m] * (1 + portReturn));
@@ -805,6 +839,23 @@ export function runBootstrapMonteCarlo(config) {
 
   const sortedDates = Array.from(allDates).sort();
 
+  // Compute total portfolio weight for leverage/cash handling
+  const totalWeightPct = assets.reduce((sum, a) => sum + a.weight, 0);
+  const weightFraction = totalWeightPct / 100;
+
+  // Historical cash rate approximation (annualized, by era)
+  const getHistoricalCashRate = (date) => {
+    const year = parseInt(date.substring(0, 4));
+    if (year <= 2001) return 0.05;
+    if (year <= 2004) return 0.015;
+    if (year <= 2007) return 0.045;
+    if (year <= 2015) return 0.002;
+    if (year <= 2018) return 0.02;
+    if (year <= 2021) return 0.002;
+    if (year <= 2022) return 0.03;
+    return 0.05;
+  };
+
   // For each date, compute portfolio monthly return
   // Use the assets that have data at that date
   const portfolioReturns = [];
@@ -822,12 +873,14 @@ export function runBootstrapMonteCarlo(config) {
       totalWeightUsed += asset.weight;
     }
 
-    // Scale if not all weights used
-    if (totalWeightUsed > 0 && totalWeightUsed < 100) {
-      portReturn = portReturn * (100 / totalWeightUsed);
-    }
-
     if (totalWeightUsed > 0) {
+      // Adjust for portfolio-level leverage or cash allocation
+      const monthlyCashReturn = getHistoricalCashRate(date) / 12;
+      if (weightFraction > 1.001) {
+        portReturn -= (weightFraction - 1) * monthlyCashReturn;
+      } else if (weightFraction < 0.999 && weightFraction > 0) {
+        portReturn += (1 - weightFraction) * monthlyCashReturn;
+      }
       portfolioReturns.push(portReturn);
     }
   }
