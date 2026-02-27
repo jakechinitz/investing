@@ -433,6 +433,17 @@
   box-shadow: var(--shadow-sm);
 }
 
+.preset-card.active {
+  border-color: var(--text-primary);
+  border-width: 2px;
+  background: var(--bg-tertiary);
+  box-shadow: var(--shadow-sm);
+}
+
+.preset-card.active .preset-card-name {
+  color: var(--text-primary);
+}
+
 .preset-card-name {
   font-weight: 600;
   font-size: 0.8125rem;
@@ -764,6 +775,9 @@
 
 .portfolio-tab.active {
   background: var(--bg-tertiary);
+  border: 2px solid var(--text-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .portfolio-tab-btn {

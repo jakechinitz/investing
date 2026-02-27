@@ -26,6 +26,8 @@ function App() {
     nYears: 20,
     seed: 42,
     regimeWeights: { standard: 70, inflation: 20, liquidity: 10 },
+    rebalanceFreq: 'monthly',
+    extendWithHybrid: false,
   });
 
   // Results: map of portfolioId -> results
@@ -103,22 +105,22 @@ function App() {
       const results = {};
 
       for (const portfolio of populatedPortfolios) {
-        if (simConfig.mode === 'simulated') {
-          const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
-          const normalizedRegimes = {};
-          for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
-            normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
-          }
+        const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
+        const normalizedRegimes = {};
+        for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
+          normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
+        }
 
+        if (simConfig.mode === 'simulated') {
           results[portfolio.id] = runMonteCarlo({
             assets: portfolio.assets,
             nPaths: simConfig.nPaths,
             nYears: simConfig.nYears,
             regimeWeights: normalizedRegimes,
             seed: simConfig.seed + portfolio.id - 1,
+            rebalanceFreq: simConfig.rebalanceFreq,
           });
         } else if (simConfig.mode === 'bootstrap') {
-          // Bootstrap Monte Carlo - needs actual return data
           let currentReturnData = returnData;
           if (Object.keys(currentReturnData).length === 0) {
             setIsFetchingReturns(true);
@@ -151,17 +153,16 @@ function App() {
             setIsFetchingReturns(false);
           }
 
-          const totalRegimeWeight = Object.values(simConfig.regimeWeights).reduce((s, v) => s + v, 0);
-          const normalizedRegimes = {};
-          for (const [k, v] of Object.entries(simConfig.regimeWeights)) {
-            normalizedRegimes[k] = totalRegimeWeight > 0 ? v / totalRegimeWeight : 0;
-          }
+          // For hybrid mode, always use fillMissing=true
+          // For actual mode, use fillMissing if extendWithHybrid is enabled
+          const useFillMissing = simConfig.mode === 'hybrid' || simConfig.extendWithHybrid;
 
           results[portfolio.id] = runBacktest({
             assets: portfolio.assets,
             returnData: currentReturnData,
-            fillMissing: simConfig.mode === 'hybrid',
+            fillMissing: useFillMissing,
             regimeWeights: normalizedRegimes,
+            rebalanceFreq: simConfig.rebalanceFreq,
           });
         }
       }
@@ -216,6 +217,7 @@ function App() {
             onRunSimulation={handleRunSimulation}
             isSimulating={isSimulating}
             simResults={simResults}
+            returnData={returnData}
           />
         );
       case 'optimizer':

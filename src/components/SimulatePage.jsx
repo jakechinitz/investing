@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ReferenceLine, Legend,
+  ReferenceLine, ReferenceArea, Legend,
 } from 'recharts';
 import { ASSETS, ASSET_CATEGORIES, searchAssets, PRESET_PORTFOLIOS, getAsset } from '../data/assets.js';
 import { CRISIS_REGIMES } from '../engine/simulation.js';
@@ -14,6 +14,13 @@ const PORTFOLIO_COLORS = [
 
 const MAX_PORTFOLIOS = 10;
 
+const REBAL_OPTIONS = [
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Quarterly' },
+  { value: 'semiannual', label: 'Semi-Annual' },
+  { value: 'annual', label: 'Annual' },
+];
+
 function SimulatePage({
   portfolios,
   activePortfolioId,
@@ -24,6 +31,7 @@ function SimulatePage({
   onRunSimulation,
   isSimulating,
   simResults,
+  returnData = {},
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [leverageAcknowledged, setLeverageAcknowledged] = useState({});
@@ -63,6 +71,56 @@ function SimulatePage({
   const toggleLeverageAck = (portfolioId) => {
     setLeverageAcknowledged((prev) => ({ ...prev, [portfolioId]: !prev[portfolioId] }));
   };
+
+  // Detect which preset matches the current active portfolio
+  const activePresetKey = useMemo(() => {
+    for (const [key, preset] of Object.entries(PRESET_PORTFOLIOS)) {
+      if (preset.assets.length !== selectedAssets.length) continue;
+      const match = preset.assets.every((pa) =>
+        selectedAssets.some((sa) => sa.id === pa.id && Math.abs(sa.weight - pa.weight) < 0.01)
+      );
+      if (match) return key;
+    }
+    return null;
+  }, [selectedAssets]);
+
+  // Compute date availability for selected assets across all portfolios
+  const dateRangeInfo = useMemo(() => {
+    const allAssetIds = new Set();
+    for (const p of portfolios) {
+      for (const a of p.assets) allAssetIds.add(a.ticker || a.id);
+    }
+    if (allAssetIds.size === 0 || Object.keys(returnData).length === 0) return null;
+
+    const assetRanges = [];
+    let latestStart = null;
+    let earliestEnd = null;
+    let longestStart = null; // earliest start date across all assets (for hybrid range)
+
+    for (const ticker of allAssetIds) {
+      const data = returnData[ticker];
+      if (!data?.dates?.length) continue;
+      const start = data.dates[0];
+      const end = data.dates[data.dates.length - 1];
+      assetRanges.push({ ticker, start, end, months: data.dates.length });
+      if (!latestStart || start > latestStart) latestStart = start;
+      if (!earliestEnd || end < earliestEnd) earliestEnd = end;
+      if (!longestStart || start < longestStart) longestStart = start;
+    }
+
+    if (assetRanges.length === 0) return null;
+
+    // Find assets that limit the common range
+    const limitingAssets = assetRanges.filter((a) => a.start === latestStart);
+
+    return {
+      assetRanges,
+      commonStart: latestStart,
+      commonEnd: earliestEnd,
+      fullRangeStart: longestStart,
+      limitingAssets,
+    };
+  }, [portfolios, returnData]);
 
   const filteredAssets = useMemo(() => searchAssets(searchQuery), [searchQuery]);
   const groupedAssets = useMemo(() => {
@@ -184,7 +242,11 @@ function SimulatePage({
         <div className="section-title" style={{ marginBottom: 'var(--space-sm)' }}>Quick Presets</div>
         <div className="preset-grid">
           {Object.entries(PRESET_PORTFOLIOS).map(([key, preset]) => (
-            <button key={key} className="preset-card" onClick={() => loadPreset(key)}>
+            <button
+              key={key}
+              className={`preset-card ${activePresetKey === key ? 'active' : ''}`}
+              onClick={() => loadPreset(key)}
+            >
               <div className="preset-card-name">{preset.name}</div>
               <div className="preset-card-desc">{preset.description}</div>
             </button>
@@ -442,25 +504,70 @@ function SimulatePage({
                   </>
                 )}
 
+                {/* Rebalance Frequency */}
+                <div className="config-row">
+                  <span className="config-label">Rebalance</span>
+                  <div className="toggle-group">
+                    {REBAL_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        className={`toggle-option ${simConfig.rebalanceFreq === opt.value ? 'active' : ''}`}
+                        onClick={() => updateConfig('rebalanceFreq', opt.value)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {simConfig.mode === 'actual' && (
                   <div style={{ padding: 'var(--space-sm) 0' }}>
                     <p className="info-text" style={{ margin: 0 }}>
                       Backtests using historical Yahoo Finance data over the common date range.
                     </p>
+                    {dateRangeInfo && (
+                      <div style={{ marginTop: 'var(--space-sm)' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+                          Common range: <strong>{dateRangeInfo.commonStart}</strong> to <strong>{dateRangeInfo.commonEnd}</strong>
+                        </div>
+                        {dateRangeInfo.fullRangeStart && dateRangeInfo.fullRangeStart < dateRangeInfo.commonStart && (
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={!!simConfig.extendWithHybrid}
+                              onChange={() => updateConfig('extendWithHybrid', !simConfig.extendWithHybrid)}
+                            />
+                            Extend to {dateRangeInfo.fullRangeStart} with simulated fills for missing assets
+                          </label>
+                        )}
+                        {dateRangeInfo.limitingAssets.length > 0 && (
+                          <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                            Limited by: {dateRangeInfo.limitingAssets.map((a) => a.ticker).join(', ')} (data starts {dateRangeInfo.commonStart})
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 {simConfig.mode === 'hybrid' && (
                   <div style={{ padding: 'var(--space-sm) 0' }}>
                     <p className="info-text" style={{ margin: 0 }}>
-                      Actual returns where available; simulated fills conditioned on other assets for gaps.
+                      Uses the full date range of the longest-running asset. Missing data is simulated conditioned on available assets.
+                      {dateRangeInfo && (
+                        <span> Range: <strong>{dateRangeInfo.fullRangeStart}</strong> to <strong>{dateRangeInfo.commonEnd}</strong></span>
+                      )}
                     </p>
+                    {dateRangeInfo && dateRangeInfo.limitingAssets.length > 0 && (
+                      <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                        Simulated fills for: {dateRangeInfo.assetRanges.filter((a) => a.start > dateRangeInfo.fullRangeStart).map((a) => a.ticker).join(', ')}
+                      </div>
+                    )}
                   </div>
                 )}
                 {simConfig.mode === 'bootstrap' && (
                   <div style={{ padding: 'var(--space-sm) 0' }}>
                     <p className="info-text" style={{ margin: 0 }}>
                       Block-bootstrap Monte Carlo: randomly samples 12-month blocks from actual history to generate synthetic paths.
-                      Requires fetching historical data first (done automatically).
                     </p>
                   </div>
                 )}
@@ -857,14 +964,42 @@ function MonteCarloDetail({ name, results, color, showHeader }) {
 function BacktestComparison({ resultsArray }) {
   const fmt = (v, d = 1) => (v != null ? v.toFixed(d) : '--');
 
-  // Build combined chart data
-  const combinedChartData = useMemo(() => {
+  // Build combined chart data with hybrid flags
+  const { combinedChartData, hybridRegions } = useMemo(() => {
     const allDates = new Set();
     for (const { results } of resultsArray) {
       if (results.dates) results.dates.forEach((d) => allDates.add(d));
     }
     const sortedDates = Array.from(allDates).sort();
-    return sortedDates.map((date) => {
+
+    // Build date -> simulated flag map from first result that has it
+    const simFlags = {};
+    for (const { results } of resultsArray) {
+      if (results.simulatedDateFlags && results.dates) {
+        for (let i = 0; i < results.dates.length; i++) {
+          if (results.simulatedDateFlags[i]) simFlags[results.dates[i]] = true;
+        }
+      }
+    }
+
+    // Find contiguous hybrid regions for grey shading
+    const regions = [];
+    let regionStart = null;
+    for (const date of sortedDates) {
+      if (simFlags[date]) {
+        if (!regionStart) regionStart = date;
+      } else {
+        if (regionStart) {
+          regions.push({ x1: regionStart, x2: date });
+          regionStart = null;
+        }
+      }
+    }
+    if (regionStart) {
+      regions.push({ x1: regionStart, x2: sortedDates[sortedDates.length - 1] });
+    }
+
+    const data = sortedDates.map((date) => {
       const point = { date };
       for (const { id, results } of resultsArray) {
         const idx = results.dates?.indexOf(date);
@@ -874,6 +1009,8 @@ function BacktestComparison({ resultsArray }) {
       }
       return point;
     });
+
+    return { combinedChartData: data, hybridRegions: regions };
   }, [resultsArray]);
 
   return (
@@ -959,7 +1096,14 @@ function BacktestComparison({ resultsArray }) {
 
       {/* Combined growth chart */}
       <div className="chart-container">
-        <div className="chart-title">Cumulative Portfolio Growth</div>
+        <div className="chart-title">
+          Cumulative Portfolio Growth
+          {hybridRegions.length > 0 && (
+            <span style={{ fontSize: '0.6875rem', fontWeight: 400, color: 'var(--text-muted)', marginLeft: 8 }}>
+              (grey regions = simulated fills)
+            </span>
+          )}
+        </div>
         <ResponsiveContainer width="100%" height={350}>
           <LineChart data={combinedChartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
@@ -967,6 +1111,9 @@ function BacktestComparison({ resultsArray }) {
             <YAxis tickFormatter={(v) => `${v?.toFixed(1)}x`} fontSize={11} tick={{ fill: '#65676b' }} />
             <Tooltip contentStyle={{ background: 'white', border: '1px solid rgba(0,0,0,0.15)', borderRadius: 8, fontSize: 12, fontFamily: 'var(--font-mono)' }} />
             <ReferenceLine y={1} stroke="rgba(0,0,0,0.2)" strokeDasharray="3 3" />
+            {hybridRegions.map((region, i) => (
+              <ReferenceArea key={i} x1={region.x1} x2={region.x2} fill="rgba(0,0,0,0.06)" fillOpacity={1} />
+            ))}
             {resultsArray.map(({ id, name, color }) => (
               <Line key={id} type="monotone" dataKey={`port_${id}`} name={name} stroke={color} strokeWidth={1.5} dot={false} connectNulls />
             ))}
