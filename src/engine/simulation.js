@@ -449,19 +449,19 @@ export function runMonteCarlo(config) {
         let assetReturn;
 
         if (asset.leverage && asset.leverage !== 0 && asset.underlying) {
-          // Use signed leverage throughout per Avellaneda & Zhang (2010):
-          //   r_LETF = L*r - (L-1)*r_f - L(L-1)/2 * σ²
-          // For L>0 (long): pays borrowing cost, moderate drag
-          // For L<0 (inverse): earns interest on short proceeds, higher drag
+          // Leveraged ETF return: L*r - (L-1)*r_f - expense
+          // No explicit beta slippage term — the monthly simulation compounds
+          // returns via path[m+1] = path[m]*(1+r), which naturally produces
+          // the correct geometric drag of L²σ²/2 annually. Adding the
+          // Avellaneda L(L-1)/2*σ² term on top would double-count the
+          // variance penalty (that formula describes arithmetic return
+          // reduction, but compounding already penalizes high variance).
           const L = asset.leverage;
           const underlyingRet = baseReturns[asset.underlying] || 0;
-          const underlyingVol = currentVols[baseClasses.indexOf(asset.underlying)] || 0;
-          const betaSlippage = 0.5 * L * (L - 1) * underlyingVol * underlyingVol;
           assetReturn =
             L * underlyingRet -
             (L - 1) * cashReturn -
-            (asset.expenseRatio || 0) * dt -
-            betaSlippage;
+            (asset.expenseRatio || 0) * dt;
         } else if (asset.stackedComponents && asset.stackedComponents.length >= 2) {
           assetReturn = -cashReturn - (asset.expenseRatio || 0) * dt;
           for (const comp of asset.stackedComponents) {
