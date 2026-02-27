@@ -28,6 +28,8 @@ function App() {
     regimeWeights: { standard: 70, inflation: 20, liquidity: 10 },
     rebalanceFreq: 'monthly',
     extendWithHybrid: false,
+    customStartDate: '',
+    customEndDate: '',
   });
 
   // Results: map of portfolioId -> results
@@ -163,6 +165,8 @@ function App() {
             fillMissing: useFillMissing,
             regimeWeights: normalizedRegimes,
             rebalanceFreq: simConfig.rebalanceFreq,
+            customStartDate: simConfig.customStartDate || null,
+            customEndDate: simConfig.customEndDate || null,
           });
         }
       }

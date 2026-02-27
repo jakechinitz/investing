@@ -645,7 +645,8 @@ function computePercentilePaths(allPaths, nMonths) {
  * @returns {Object} backtest results
  */
 export function runBacktest(config) {
-  const { assets, returnData, fillMissing = false, regimeWeights, rebalanceFreq = 'monthly' } = config;
+  const { assets, returnData, fillMissing = false, regimeWeights, rebalanceFreq = 'monthly',
+          customStartDate = null, customEndDate = null } = config;
 
   // Find the common date range
   let allDates = new Set();
@@ -657,9 +658,20 @@ export function runBacktest(config) {
     for (const d of data.dates) allDates.add(d);
   }
 
-  const sortedDates = Array.from(allDates).sort();
+  let sortedDates = Array.from(allDates).sort();
   if (sortedDates.length === 0) {
     return { error: 'No data available for selected assets' };
+  }
+
+  // Apply custom date filters if provided
+  if (customStartDate) {
+    sortedDates = sortedDates.filter((d) => d >= customStartDate);
+  }
+  if (customEndDate) {
+    sortedDates = sortedDates.filter((d) => d <= customEndDate);
+  }
+  if (sortedDates.length === 0) {
+    return { error: 'No data in selected date range' };
   }
 
   // Find earliest date where all assets have data (or use fill)
