@@ -952,32 +952,35 @@ export function runBootstrapMonteCarlo(config) {
   };
 
   // For each date, compute portfolio monthly return
-  // Use the assets that have data at that date
+  // Only include dates where ALL assets have data to avoid partial-weight distortion
   const portfolioReturns = [];
   for (const date of sortedDates) {
-    let portReturn = 0;
-    let totalWeightUsed = 0;
-
+    // Check that every asset has data for this date
+    let allAvailable = true;
     for (const asset of assets) {
       const data = returnData[asset.ticker];
-      if (!data?.dates) continue;
-      const dateIdx = data.dates.indexOf(date);
-      if (dateIdx < 0) continue;
-
-      portReturn += (asset.weight / 100) * data.returns[dateIdx];
-      totalWeightUsed += asset.weight;
-    }
-
-    if (totalWeightUsed > 0) {
-      // Adjust for portfolio-level leverage or cash allocation
-      const monthlyCashReturn = getHistoricalCashRate(date) / 12;
-      if (weightFraction > 1.001) {
-        portReturn -= (weightFraction - 1) * monthlyCashReturn;
-      } else if (weightFraction < 0.999 && weightFraction > 0) {
-        portReturn += (1 - weightFraction) * monthlyCashReturn;
+      if (!data?.dates || data.dates.indexOf(date) < 0) {
+        allAvailable = false;
+        break;
       }
-      portfolioReturns.push(portReturn);
     }
+    if (!allAvailable) continue;
+
+    let portReturn = 0;
+    for (const asset of assets) {
+      const data = returnData[asset.ticker];
+      const dateIdx = data.dates.indexOf(date);
+      portReturn += (asset.weight / 100) * data.returns[dateIdx];
+    }
+
+    // Adjust for portfolio-level leverage or cash allocation
+    const monthlyCashReturn = getHistoricalCashRate(date) / 12;
+    if (weightFraction > 1.001) {
+      portReturn -= (weightFraction - 1) * monthlyCashReturn;
+    } else if (weightFraction < 0.999 && weightFraction > 0) {
+      portReturn += (1 - weightFraction) * monthlyCashReturn;
+    }
+    portfolioReturns.push(portReturn);
   }
 
   const totalHistMonths = portfolioReturns.length;
