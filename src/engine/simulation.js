@@ -141,7 +141,7 @@ const CRISIS_REGIMES = {
       equityBondCorr: -0.45,
       equityGoldCorr: 0.10,
       equityTrendCorr: -0.15,
-      bondReturnBoost: 0.12,   // Bonds rally in deflationary crisis
+      bondReturnBoost: 0.035,   // Bonds rally in deflationary crisis (base 4.5% + 3.5% = 8%)
       goldReturnBoost: 0.02,
       trendReturnBoost: 0.10,
       cashRateOverride: 0.005,
@@ -453,7 +453,7 @@ export function runMonteCarlo(config) {
           const sign = asset.leverage > 0 ? 1 : -1;
           const underlyingRet = baseReturns[asset.underlying] || 0;
           const underlyingVol = currentVols[baseClasses.indexOf(asset.underlying)] || 0;
-          const betaSlippage = lev * underlyingVol * underlyingVol;
+          const betaSlippage = 0.5 * lev * (lev - 1) * underlyingVol * underlyingVol;
           assetReturn =
             sign * lev * underlyingRet -
             (lev - 1) * cashReturn -
@@ -518,8 +518,9 @@ export function runMonteCarlo(config) {
     const excess = portMonthlyRets.map((r) => r - rf);
     const meanExcess = mean(excess);
     const stdExcess = stddev(excess);
-    const downside = excess.filter((e) => e < 0);
-    const stdDownside = stddev(downside);
+    // Sortino downside deviation: sqrt(sum of squared negative excess / N)
+    const downsideSqSum = excess.reduce((s, e) => s + (e < 0 ? e * e : 0), 0);
+    const stdDownside = excess.length > 0 ? Math.sqrt(downsideSqSum / excess.length) : 0;
 
     allStats.vol[p] = stddev(portMonthlyRets) * Math.sqrt(12) * 100;
     allStats.sharpe[p] = stdExcess > 0 ? (meanExcess / stdExcess) * Math.sqrt(12) : 0;
@@ -799,8 +800,9 @@ export function runBacktest(config) {
   const excess = Array.from(monthlyRets).map((r) => r - rf);
   const meanExcess = mean(excess);
   const stdExcess = stddev(excess);
-  const downside = excess.filter((e) => e < 0);
-  const stdDownside = stddev(downside);
+  // Sortino downside deviation: sqrt(sum of squared negative excess / N)
+  const downsideSqSum = excess.reduce((s, e) => s + (e < 0 ? e * e : 0), 0);
+  const stdDownside = excess.length > 0 ? Math.sqrt(downsideSqSum / excess.length) : 0;
 
   // Compute a start date that sorts before all data dates
   const firstDate = dates[0]; // e.g. '2000-02-01'
@@ -1029,8 +1031,9 @@ export function runBootstrapMonteCarlo(config) {
     const excess = pathMonthlyRets.map((r) => r - rf);
     const meanExcess = mean(excess);
     const stdExcess = stddev(excess);
-    const downside = excess.filter((e) => e < 0);
-    const stdDownside = stddev(downside);
+    // Sortino downside deviation: sqrt(sum of squared negative excess / N)
+    const downsideSqSum = excess.reduce((s, e) => s + (e < 0 ? e * e : 0), 0);
+    const stdDownside = excess.length > 0 ? Math.sqrt(downsideSqSum / excess.length) : 0;
 
     allStats.vol[p] = stddev(pathMonthlyRets) * Math.sqrt(12) * 100;
     allStats.sharpe[p] = stdExcess > 0 ? (meanExcess / stdExcess) * Math.sqrt(12) : 0;
