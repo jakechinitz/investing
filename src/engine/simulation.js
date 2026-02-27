@@ -662,6 +662,17 @@ export function runBacktest(config) {
     for (const d of data.dates) allDates.add(d);
   }
 
+  // When fillMissing is enabled, expand the date universe to include dates from
+  // ALL assets in returnData (not just this portfolio's assets). This ensures all
+  // portfolios share the same date range when comparing side by side.
+  if (fillMissing) {
+    for (const ticker of Object.keys(returnData)) {
+      const data = returnData[ticker];
+      if (!data?.dates) continue;
+      for (const d of data.dates) allDates.add(d);
+    }
+  }
+
   let sortedDates = Array.from(allDates).sort();
   if (sortedDates.length === 0) {
     return { error: 'No data available for selected assets' };
@@ -932,6 +943,16 @@ export function runBootstrapMonteCarlo(config) {
     if (!data?.dates) continue;
     assetDateSets[asset.ticker] = new Set(data.dates);
     for (const d of data.dates) allDates.add(d);
+  }
+
+  // When fillMissing is enabled, expand dates to the full returnData universe
+  // so all portfolios share the same date range for apples-to-apples comparison.
+  if (fillMissing) {
+    for (const ticker of Object.keys(returnData)) {
+      const data = returnData[ticker];
+      if (!data?.dates) continue;
+      for (const d of data.dates) allDates.add(d);
+    }
   }
 
   const sortedDates = Array.from(allDates).sort();
