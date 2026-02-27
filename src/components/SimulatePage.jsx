@@ -596,6 +596,26 @@ function SimulatePage({
                     <p className="info-text" style={{ margin: 0 }}>
                       Block-bootstrap Monte Carlo: randomly samples 12-month blocks from actual history to generate synthetic paths.
                     </p>
+                    {dateRangeInfo && dateRangeInfo.fullRangeStart < dateRangeInfo.commonStart && (
+                      <div style={{ marginTop: 'var(--space-sm)' }}>
+                        <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
+                          Common data: {dateRangeInfo.commonStart} to {dateRangeInfo.commonEnd} &middot; Earliest: {dateRangeInfo.fullRangeStart}
+                        </div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', cursor: 'pointer', marginTop: 4 }}>
+                          <input
+                            type="checkbox"
+                            checked={!!simConfig.bootstrapFillMissing}
+                            onChange={() => updateConfig('bootstrapFillMissing', !simConfig.bootstrapFillMissing)}
+                          />
+                          Extend with model estimates for missing asset data
+                        </label>
+                        {simConfig.bootstrapFillMissing && (
+                          <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                            Estimated fills for: {dateRangeInfo.assetRanges.filter((a) => a.start > dateRangeInfo.fullRangeStart).map((a) => a.ticker).join(', ') || 'none'}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
