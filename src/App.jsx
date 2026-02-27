@@ -28,6 +28,7 @@ function App() {
     regimeWeights: { standard: 70, inflation: 20, liquidity: 10 },
     rebalanceFreq: 'monthly',
     extendWithHybrid: false,
+    bootstrapFillMissing: false,
     customStartDate: '',
     customEndDate: '',
   });
@@ -141,6 +142,8 @@ function App() {
             nYears: simConfig.nYears,
             blockSize: 12,
             seed: simConfig.seed + portfolio.id - 1,
+            fillMissing: simConfig.bootstrapFillMissing,
+            regimeWeights: normalizedRegimes,
           });
         } else {
           // Actual or Hybrid

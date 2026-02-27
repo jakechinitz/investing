@@ -916,6 +916,8 @@ export function runBootstrapMonteCarlo(config) {
     nYears = 20,
     blockSize = 12,
     seed = 42,
+    fillMissing = false,
+    regimeWeights,
   } = config;
 
   const rng = mulberry32(seed);
@@ -952,26 +954,32 @@ export function runBootstrapMonteCarlo(config) {
   };
 
   // For each date, compute portfolio monthly return
-  // Only include dates where ALL assets have data to avoid partial-weight distortion
+  // When fillMissing is disabled, only include dates where ALL assets have data.
+  // When fillMissing is enabled, estimate missing asset returns using the simulation model.
   const portfolioReturns = [];
   for (const date of sortedDates) {
-    // Check that every asset has data for this date
-    let allAvailable = true;
-    for (const asset of assets) {
-      const data = returnData[asset.ticker];
-      if (!data?.dates || data.dates.indexOf(date) < 0) {
-        allAvailable = false;
-        break;
-      }
-    }
-    if (!allAvailable) continue;
-
     let portReturn = 0;
+    let anyMissing = false;
+
     for (const asset of assets) {
       const data = returnData[asset.ticker];
-      const dateIdx = data.dates.indexOf(date);
-      portReturn += (asset.weight / 100) * data.returns[dateIdx];
+      const dateIdx = data?.dates ? data.dates.indexOf(date) : -1;
+
+      let assetReturn;
+      if (dateIdx >= 0) {
+        assetReturn = data.returns[dateIdx];
+      } else if (fillMissing) {
+        assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights);
+        anyMissing = true;
+      } else {
+        anyMissing = true;
+        break; // skip this date entirely
+      }
+
+      portReturn += (asset.weight / 100) * assetReturn;
     }
+
+    if (anyMissing && !fillMissing) continue;
 
     // Adjust for portfolio-level leverage or cash allocation
     const monthlyCashReturn = getHistoricalCashRate(date) / 12;
