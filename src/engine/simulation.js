@@ -449,14 +449,17 @@ export function runMonteCarlo(config) {
         let assetReturn;
 
         if (asset.leverage && asset.leverage !== 0 && asset.underlying) {
-          const lev = Math.abs(asset.leverage);
-          const sign = asset.leverage > 0 ? 1 : -1;
+          // Use signed leverage throughout per Avellaneda & Zhang (2010):
+          //   r_LETF = L*r - (L-1)*r_f - L(L-1)/2 * σ²
+          // For L>0 (long): pays borrowing cost, moderate drag
+          // For L<0 (inverse): earns interest on short proceeds, higher drag
+          const L = asset.leverage;
           const underlyingRet = baseReturns[asset.underlying] || 0;
           const underlyingVol = currentVols[baseClasses.indexOf(asset.underlying)] || 0;
-          const betaSlippage = 0.5 * lev * (lev - 1) * underlyingVol * underlyingVol;
+          const betaSlippage = 0.5 * L * (L - 1) * underlyingVol * underlyingVol;
           assetReturn =
-            sign * lev * underlyingRet -
-            (lev - 1) * cashReturn -
+            L * underlyingRet -
+            (L - 1) * cashReturn -
             (asset.expenseRatio || 0) * dt -
             betaSlippage;
         } else if (asset.stackedComponents && asset.stackedComponents.length >= 2) {
