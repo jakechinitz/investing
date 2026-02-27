@@ -238,7 +238,7 @@ function SimulatePage({
       </div>
 
       {/* ─── Presets (Always Visible) ─── */}
-      <div className="section">
+      <div className="section section-divider">
         <div className="section-title" style={{ marginBottom: 'var(--space-sm)' }}>Quick Presets</div>
         <div className="preset-grid">
           {Object.entries(PRESET_PORTFOLIOS).map(([key, preset]) => (
@@ -307,7 +307,7 @@ function SimulatePage({
       </div>
 
       {/* ─── Portfolio Builder ─── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)', marginBottom: 'var(--space-lg)' }}>
+      <div className="section-divider" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)' }}>
         {/* Available Assets */}
         <div className="section">
           <div className="section-header">
@@ -520,46 +520,73 @@ function SimulatePage({
                   </div>
                 </div>
 
-                {simConfig.mode === 'actual' && (
+                {(simConfig.mode === 'actual' || simConfig.mode === 'hybrid') && (
                   <div style={{ padding: 'var(--space-sm) 0' }}>
-                    <p className="info-text" style={{ margin: 0 }}>
-                      Backtests using historical Yahoo Finance data over the common date range.
-                    </p>
+                    {simConfig.mode === 'actual' && (
+                      <p className="info-text" style={{ margin: '0 0 var(--space-sm)' }}>
+                        Backtests using historical Yahoo Finance data.
+                      </p>
+                    )}
+                    {simConfig.mode === 'hybrid' && (
+                      <p className="info-text" style={{ margin: '0 0 var(--space-sm)' }}>
+                        Uses the full date range. Missing data is simulated conditioned on available assets.
+                      </p>
+                    )}
+                    <div className="config-row" style={{ borderBottom: 'none', padding: '4px 0' }}>
+                      <span className="config-label">Start Date</span>
+                      <input
+                        type="date"
+                        value={simConfig.customStartDate}
+                        onChange={(e) => updateConfig('customStartDate', e.target.value)}
+                        style={{ fontSize: '0.8125rem', fontFamily: 'var(--font-mono)', padding: '4px 8px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}
+                      />
+                    </div>
+                    <div className="config-row" style={{ borderBottom: 'none', padding: '4px 0' }}>
+                      <span className="config-label">End Date</span>
+                      <input
+                        type="date"
+                        value={simConfig.customEndDate}
+                        onChange={(e) => updateConfig('customEndDate', e.target.value)}
+                        style={{ fontSize: '0.8125rem', fontFamily: 'var(--font-mono)', padding: '4px 8px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}
+                      />
+                    </div>
+                    {(simConfig.customStartDate || simConfig.customEndDate) && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 4, fontSize: '0.6875rem' }}
+                        onClick={() => { updateConfig('customStartDate', ''); updateConfig('customEndDate', ''); }}
+                      >
+                        Reset to full range
+                      </button>
+                    )}
                     {dateRangeInfo && (
                       <div style={{ marginTop: 'var(--space-sm)' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 4 }}>
-                          Common range: <strong>{dateRangeInfo.commonStart}</strong> to <strong>{dateRangeInfo.commonEnd}</strong>
+                        <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
+                          Available: {dateRangeInfo.fullRangeStart || dateRangeInfo.commonStart} to {dateRangeInfo.commonEnd}
+                          {simConfig.mode === 'actual' && dateRangeInfo.fullRangeStart < dateRangeInfo.commonStart && (
+                            <span> (common: {dateRangeInfo.commonStart})</span>
+                          )}
                         </div>
-                        {dateRangeInfo.fullRangeStart && dateRangeInfo.fullRangeStart < dateRangeInfo.commonStart && (
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
+                        {simConfig.mode === 'actual' && dateRangeInfo.fullRangeStart < dateRangeInfo.commonStart && (
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', cursor: 'pointer', marginTop: 4 }}>
                             <input
                               type="checkbox"
                               checked={!!simConfig.extendWithHybrid}
                               onChange={() => updateConfig('extendWithHybrid', !simConfig.extendWithHybrid)}
                             />
-                            Extend to {dateRangeInfo.fullRangeStart} with simulated fills for missing assets
+                            Extend with simulated fills for missing assets
                           </label>
                         )}
-                        {dateRangeInfo.limitingAssets.length > 0 && (
+                        {dateRangeInfo.limitingAssets.length > 0 && simConfig.mode === 'actual' && (
                           <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                            Limited by: {dateRangeInfo.limitingAssets.map((a) => a.ticker).join(', ')} (data starts {dateRangeInfo.commonStart})
+                            Limited by: {dateRangeInfo.limitingAssets.map((a) => a.ticker).join(', ')}
                           </div>
                         )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {simConfig.mode === 'hybrid' && (
-                  <div style={{ padding: 'var(--space-sm) 0' }}>
-                    <p className="info-text" style={{ margin: 0 }}>
-                      Uses the full date range of the longest-running asset. Missing data is simulated conditioned on available assets.
-                      {dateRangeInfo && (
-                        <span> Range: <strong>{dateRangeInfo.fullRangeStart}</strong> to <strong>{dateRangeInfo.commonEnd}</strong></span>
-                      )}
-                    </p>
-                    {dateRangeInfo && dateRangeInfo.limitingAssets.length > 0 && (
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                        Simulated fills for: {dateRangeInfo.assetRanges.filter((a) => a.start > dateRangeInfo.fullRangeStart).map((a) => a.ticker).join(', ')}
+                        {simConfig.mode === 'hybrid' && (
+                          <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                            Simulated fills for: {dateRangeInfo.assetRanges.filter((a) => a.start > dateRangeInfo.fullRangeStart).map((a) => a.ticker).join(', ') || 'none'}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
