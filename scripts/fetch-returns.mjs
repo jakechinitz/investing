@@ -46,6 +46,10 @@ export async function buildSnapshot({
     concurrency,
     useSnapshot: false,
     useCache: false,
+    // Be patient and polite with Yahoo from a datacenter IP: pace requests and
+    // retry 429s/hiccups with growing backoff rather than giving up quickly.
+    interRequestDelayMs: 350,
+    retryDelays: [2000, 5000, 12000],
     onProgress: (done, n, ticker) => {
       if (done % 10 === 0 || done === n) log(`  ${done}/${n} (${ticker})`);
     },

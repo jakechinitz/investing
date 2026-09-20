@@ -6,7 +6,24 @@ import ActualReturnsPanel from './components/ActualReturnsPanel.jsx';
 import Optimizer from './components/Optimizer.jsx';
 import { runMonteCarlo, runBacktest, runBootstrapMonteCarlo } from './engine/simulation.js';
 import { fetchAllReturns } from './data/fetchReturns.js';
-import { ASSETS } from './data/assets.js';
+import { ASSETS, PRESET_PORTFOLIOS, getAsset } from './data/assets.js';
+
+// Fetch order for historical data: assets in the user's portfolios first, then
+// preset-portfolio assets, then everything else. Combined with progressive
+// rendering this makes the data people actually simulate with land in the
+// first few seconds instead of somewhere in an 80-ticker queue.
+function prioritizeAssets(all, portfolios) {
+  const rank = new Map();
+  const bump = (idOrTicker, r) => {
+    const a = getAsset(idOrTicker);
+    if (a && !rank.has(a.ticker)) rank.set(a.ticker, r);
+  };
+  for (const p of portfolios) for (const a of p.assets) bump(a.ticker || a.id, 0);
+  for (const preset of Object.values(PRESET_PORTFOLIOS)) for (const a of preset.assets) bump(a.id, 1);
+  // A prioritized asset's comparable fallback should be fetched just as early
+  for (const a of all) if (a.comparable && rank.has(a.ticker)) bump(a.comparable, rank.get(a.ticker));
+  return [...all].sort((a, b) => (rank.get(a.ticker) ?? 2) - (rank.get(b.ticker) ?? 2));
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState('simulate');
@@ -59,7 +76,7 @@ function App() {
       try {
         // Render progressively: snapshot/cache hits appear instantly, live
         // fetches land one by one instead of waiting for the slowest ticker.
-        const final = await fetchAllReturns(ASSETS, { onData: applyReturnBatch });
+        const final = await fetchAllReturns(prioritizeAssets(ASSETS, portfolios), { onData: applyReturnBatch });
         applyReturnBatch(final);
       } catch (err) {
         console.error('Auto-fetch error:', err);
@@ -197,14 +214,14 @@ function App() {
     try {
       // Manual refresh bypasses the browser cache and re-fetches live,
       // keeping snapshot values as a fallback for anything that fails.
-      const final = await fetchAllReturns(ASSETS, { onData: applyReturnBatch, forceRefresh: true });
+      const final = await fetchAllReturns(prioritizeAssets(ASSETS, portfolios), { onData: applyReturnBatch, forceRefresh: true });
       applyReturnBatch(final);
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {
       setIsFetchingReturns(false);
     }
-  }, []);
+  }, [portfolios, applyReturnBatch]);
 
   // ─── Apply optimizer weights to a specific portfolio ───
   const handleApplyWeightsToPortfolio = useCallback((assets, portfolioId) => {
