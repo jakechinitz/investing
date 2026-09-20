@@ -5,10 +5,68 @@
  * computes monthly returns, and handles comparable asset fallbacks.
  */
 
+const YAHOO_HOSTS = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
+
 const CORS_PROXIES = [
   (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
+
+const FETCH_TIMEOUT_MS = 15000;   // per attempt
+const MAX_CONCURRENT = 6;         // simultaneous tickers (free proxies rate-limit bursts)
+const RETRY_DELAYS_MS = [1000, 3000]; // retry whole ticker after transient failure
+
+async function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Try every host/proxy combination once. Returns Yahoo chart JSON or null.
+ */
+async function fetchChartOnce(ticker, period1, period2) {
+  let lastError = null;
+  for (const host of YAHOO_HOSTS) {
+    const baseUrl = `https://${host}/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1mo`;
+    const urls = [baseUrl, ...CORS_PROXIES.map((proxy) => proxy(baseUrl))];
+    for (const url of urls) {
+      try {
+        const response = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+        if (!response.ok) {
+          lastError = new Error(`HTTP ${response.status}`);
+          continue;
+        }
+        const text = await response.text();
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          lastError = new Error('Non-JSON response (proxy returned HTML?)');
+          continue;
+        }
+        if (json?.chart?.result?.[0]) return json;
+        if (json?.chart?.error) {
+          // Definitive answer from Yahoo (e.g. unknown symbol) — no point retrying elsewhere
+          throw new Error(json.chart.error.description || json.chart.error.code || 'Yahoo error');
+        }
+        lastError = new Error('Empty chart result');
+      } catch (e) {
+        if (e?.message && !e.name?.includes('Abort') && /Yahoo error|No data found|Not Found/i.test(e.message)) throw e;
+        lastError = e;
+      }
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
 
 /**
  * Fetch monthly price data from Yahoo Finance
@@ -22,27 +80,18 @@ export async function fetchMonthlyReturns(ticker, startDate = null) {
     : 0;
   const period2 = Math.floor(Date.now() / 1000);
 
-  const baseUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1mo`;
-
   let data = null;
   let lastError = null;
-
-  // Try direct first, then CORS proxies
-  const urls = [baseUrl, ...CORS_PROXIES.map((proxy) => proxy(baseUrl))];
-
-  for (const url of urls) {
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      const response = await fetch(url, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) continue;
-      data = await response.json();
-      if (data?.chart?.result?.[0]) break;
-      data = null;
+      data = await fetchChartOnce(ticker, period1, period2);
+      if (data) break;
     } catch (e) {
       lastError = e;
-      continue;
+      // Symbol-level errors from Yahoo are final; network/proxy errors get retried
+      if (/Yahoo error|No data found|Not Found/i.test(e?.message || '')) break;
     }
+    if (attempt < RETRY_DELAYS_MS.length) await sleep(RETRY_DELAYS_MS[attempt]);
   }
 
   if (!data?.chart?.result?.[0]) {
@@ -100,15 +149,22 @@ export async function fetchMonthlyReturns(ticker, startDate = null) {
  * @param {Array<Object>} assets - Asset definitions from assets.js
  * @returns {Object} {[ticker]: {dates, returns, ...}, metadata: {}}
  */
-export async function fetchAllReturns(assets) {
+export async function fetchAllReturns(assets, { concurrency = MAX_CONCURRENT, onProgress } = {}) {
   const results = {};
   const metadata = {};
   const errors = {};
 
-  // First pass: try to fetch each asset
-  const fetchPromises = assets.map(async (asset) => {
+  // Memoize per ticker so a comparable shared by many assets (e.g. SPY) is
+  // fetched once, and so an asset that is also someone's comparable is reused.
+  const inflight = new Map();
+  const getTicker = (ticker) => {
+    if (!inflight.has(ticker)) inflight.set(ticker, fetchMonthlyReturns(ticker));
+    return inflight.get(ticker);
+  };
+
+  const fetchOne = async (asset) => {
     try {
-      const data = await fetchMonthlyReturns(asset.ticker);
+      const data = await getTicker(asset.ticker);
       results[asset.ticker] = data;
       metadata[asset.ticker] = {
         source: 'direct',
@@ -122,7 +178,7 @@ export async function fetchAllReturns(assets) {
       // Try comparable asset
       if (asset.comparable) {
         try {
-          const compData = await fetchMonthlyReturns(asset.comparable);
+          const compData = await getTicker(asset.comparable);
           results[asset.ticker] = compData;
           metadata[asset.ticker] = {
             source: 'comparable',
@@ -137,9 +193,21 @@ export async function fetchAllReturns(assets) {
         }
       }
     }
-  });
+  };
 
-  await Promise.all(fetchPromises);
+  // Bounded concurrency: free CORS proxies rate-limit bursts of 80+ requests
+  const queue = [...assets];
+  let done = 0;
+  const worker = async () => {
+    while (queue.length > 0) {
+      const asset = queue.shift();
+      await fetchOne(asset);
+      done += 1;
+      onProgress?.(done, assets.length, asset.ticker);
+    }
+  };
+  const nWorkers = Math.max(1, Math.min(concurrency, assets.length));
+  await Promise.all(Array.from({ length: nWorkers }, worker));
 
   return { data: results, metadata, errors };
 }

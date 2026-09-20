@@ -10,6 +10,8 @@
  * - Conditional simulation for filling missing history
  */
 
+import { getAsset } from '../data/assets.js';
+
 // ─── Seedable PRNG (Mulberry32) ───
 function mulberry32(seed) {
   return function () {
@@ -854,54 +856,100 @@ export function runBacktest(config) {
   };
 }
 
+// ─── Missing-return estimation ───
+// Observations are drawn from EVERY ticker in returnData (not just the current
+// portfolio's assets), so a portfolio whose own assets start in 2009 still has
+// its 1993-2009 fills driven by what SPY/AGG/GLD/etc. actually did each month.
+// Per-date class deviations are cached per returnData object, since the same
+// date is queried once per missing asset per portfolio.
+
+const _obsCache = new WeakMap();
+
+function getObsCache(returnData) {
+  let cache = _obsCache.get(returnData);
+  if (!cache) {
+    cache = { dateIdx: new Map(), classDev: new Map() };
+    _obsCache.set(returnData, cache);
+  }
+  return cache;
+}
+
+function getDateIndexMap(cache, ticker, data) {
+  let m = cache.dateIdx.get(ticker);
+  if (!m) {
+    m = new Map();
+    for (let i = 0; i < data.dates.length; i++) m.set(data.dates[i], i);
+    cache.dateIdx.set(ticker, m);
+  }
+  return m;
+}
+
 /**
- * Simulate a missing return for an asset using conditional distribution
- * Based on other assets' actual returns and known correlations
+ * For a given date, compute the average standardized deviation
+ * (r - mu/12) / (sigma/sqrt(12)) of every base class that has at least one
+ * ticker with actual data. Returns Map<className, avgDeviation>.
+ */
+function getClassDeviationsForDate(returnData, date) {
+  const cache = getObsCache(returnData);
+  if (cache.classDev.has(date)) return cache.classDev.get(date);
+
+  const sums = {};
+  for (const ticker of Object.keys(returnData)) {
+    const data = returnData[ticker];
+    if (!data?.dates || !data?.returns) continue;
+    const def = getAsset(ticker);
+    const cls = def?.baseClass;
+    if (!cls || !BASE_CLASSES[cls] || cls === 'cash') continue;
+
+    const idx = getDateIndexMap(cache, ticker, data).get(date);
+    if (idx === undefined) continue;
+    const r = data.returns[idx];
+    if (r == null || !Number.isFinite(r)) continue;
+
+    const bc = BASE_CLASSES[cls];
+    const dev = (r - bc.mu / 12) / (bc.sigma / Math.sqrt(12));
+    if (!sums[cls]) sums[cls] = { sum: 0, n: 0 };
+    sums[cls].sum += dev;
+    sums[cls].n += 1;
+  }
+
+  const result = new Map();
+  for (const [cls, { sum, n }] of Object.entries(sums)) result.set(cls, sum / n);
+  cache.classDev.set(date, result);
+  return result;
+}
+
+/**
+ * Estimate a missing monthly return for an asset using the conditional mean
+ * given observed returns of all other asset classes on that date:
+ *   E[X|Y] ≈ mu_X + vol_X * mean_over_classes( corr(X,Y_k) * z_k )
+ * where z_k is the standardized deviation of class k that month.
  */
 function simulateMissingReturn(asset, date, allAssets, returnData, regimeWeights) {
-  // Collect actual returns from other assets at this date
-  const observedReturns = [];
-  const observedClasses = [];
-
-  for (const other of allAssets) {
-    if (other.ticker === asset.ticker) continue;
-    const data = returnData[other.ticker];
-    if (!data) continue;
-    const idx = data.dates.indexOf(date);
-    if (idx >= 0) {
-      observedReturns.push(data.returns[idx]);
-      observedClasses.push(other.baseClass || 'us_equity');
-    }
-  }
-
-  if (observedReturns.length === 0) {
-    // No other data available, use unconditional mean
-    const bc = BASE_CLASSES[asset.baseClass || 'us_equity'];
-    return bc.mu / 12;
-  }
-
-  // Conditional mean: E[X|Y] = mu_X + Sigma_XY * Sigma_YY^{-1} * (Y - mu_Y)
   const assetClass = asset.baseClass || 'us_equity';
-  const bc = BASE_CLASSES[assetClass];
-  const assetClassIdx = CLASS_ORDER.indexOf(assetClass);
-
-  // Simple approximation: weighted average of correlations * observed deviations
-  let conditionalShift = 0;
-  for (let i = 0; i < observedReturns.length; i++) {
-    const otherClassIdx = CLASS_ORDER.indexOf(observedClasses[i]);
-    const corr = NORMAL_CORR[assetClassIdx][otherClassIdx];
-    const otherBC = BASE_CLASSES[observedClasses[i]];
-    const otherExpected = otherBC.mu / 12;
-    const otherVol = otherBC.sigma / Math.sqrt(12);
-    const deviation = (observedReturns[i] - otherExpected) / (otherVol || 1);
-    conditionalShift += corr * deviation;
-  }
-  conditionalShift /= observedReturns.length;
-
+  const bc = BASE_CLASSES[assetClass] || BASE_CLASSES.us_equity;
   const expectedReturn = bc.mu / 12;
   const vol = bc.sigma / Math.sqrt(12);
 
-  return expectedReturn + conditionalShift * vol;
+  const classDev = getClassDeviationsForDate(returnData, date);
+  if (classDev.size === 0) return expectedReturn;
+
+  const assetClassIdx = CLASS_ORDER.indexOf(assetClass);
+  let shift = 0;
+  let n = 0;
+  for (const [cls, z] of classDev) {
+    if (cls === assetClass) {
+      // Same class observed directly (e.g. VOO missing but SPY present): use it fully
+      return expectedReturn + z * vol;
+    }
+    const otherIdx = CLASS_ORDER.indexOf(cls);
+    if (otherIdx < 0 || assetClassIdx < 0) continue;
+    shift += NORMAL_CORR[assetClassIdx][otherIdx] * z;
+    n += 1;
+  }
+  if (n === 0) return expectedReturn;
+
+  return expectedReturn + (shift / n) * vol;
 }
 
 // ─── Bootstrap Monte Carlo ───
