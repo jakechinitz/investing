@@ -170,6 +170,7 @@ function App() {
             rebalanceFreq: simConfig.rebalanceFreq,
             customStartDate: simConfig.customStartDate || null,
             customEndDate: simConfig.customEndDate || null,
+            seed: simConfig.seed + portfolio.id - 1,
           });
         }
       }
