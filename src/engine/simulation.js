@@ -652,7 +652,9 @@ function computePercentilePaths(allPaths, nMonths) {
  */
 export function runBacktest(config) {
   const { assets, returnData, fillMissing = false, regimeWeights, rebalanceFreq = 'monthly',
-          customStartDate = null, customEndDate = null } = config;
+          customStartDate = null, customEndDate = null, seed = 42 } = config;
+  // Seeded RNG for the residual term of simulated fills (reproducible hybrid runs)
+  const fillRng = mulberry32(seed);
 
   // Find the common date range
   let allDates = new Set();
@@ -767,7 +769,7 @@ export function runBacktest(config) {
         if (dateIdx >= 0) {
           assetReturn = data.returns[dateIdx];
         } else if (fillMissing) {
-          assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights);
+          assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights, fillRng);
         } else {
           assetReturn = 0;
         }
@@ -925,31 +927,44 @@ function getClassDeviationsForDate(returnData, date) {
  *   E[X|Y] ≈ mu_X + vol_X * mean_over_classes( corr(X,Y_k) * z_k )
  * where z_k is the standardized deviation of class k that month.
  */
-function simulateMissingReturn(asset, date, allAssets, returnData, regimeWeights) {
+function simulateMissingReturn(asset, date, allAssets, returnData, regimeWeights, rng = null) {
   const assetClass = asset.baseClass || 'us_equity';
   const bc = BASE_CLASSES[assetClass] || BASE_CLASSES.us_equity;
   const expectedReturn = bc.mu / 12;
   const vol = bc.sigma / Math.sqrt(12);
 
+  // Residual term: the conditional mean explains only rho² of the variance;
+  // the rest is idiosyncratic and must be drawn, otherwise filled assets look
+  // like scaled copies of the observed class with understated volatility.
+  const residual = (rho) => {
+    if (!rng) return 0;
+    const resSd = vol * Math.sqrt(Math.max(0, 1 - rho * rho));
+    return resSd * studentT(rng, bc.dfT);
+  };
+
   const classDev = getClassDeviationsForDate(returnData, date);
-  if (classDev.size === 0) return expectedReturn;
+  if (classDev.size === 0) return expectedReturn + residual(0);
 
   const assetClassIdx = CLASS_ORDER.indexOf(assetClass);
   let shift = 0;
   let n = 0;
+  let maxAbsCorr = 0;
   for (const [cls, z] of classDev) {
     if (cls === assetClass) {
-      // Same class observed directly (e.g. VOO missing but SPY present): use it fully
-      return expectedReturn + z * vol;
+      // Same class observed directly (e.g. VOO missing but SPY present):
+      // near-perfect tracking with a small idiosyncratic residual
+      return expectedReturn + z * vol + residual(0.97);
     }
     const otherIdx = CLASS_ORDER.indexOf(cls);
     if (otherIdx < 0 || assetClassIdx < 0) continue;
-    shift += NORMAL_CORR[assetClassIdx][otherIdx] * z;
+    const corr = NORMAL_CORR[assetClassIdx][otherIdx];
+    shift += corr * z;
     n += 1;
+    if (Math.abs(corr) > maxAbsCorr) maxAbsCorr = Math.abs(corr);
   }
-  if (n === 0) return expectedReturn;
+  if (n === 0) return expectedReturn + residual(0);
 
-  return expectedReturn + (shift / n) * vol;
+  return expectedReturn + (shift / n) * vol + residual(maxAbsCorr);
 }
 
 // ─── Bootstrap Monte Carlo ───
@@ -980,6 +995,7 @@ export function runBootstrapMonteCarlo(config) {
   } = config;
 
   const rng = mulberry32(seed);
+  const fillRng = mulberry32(seed + 7919); // separate stream so fills don't perturb block sampling
   const nMonths = nYears * 12;
 
   // Build aligned return matrix: for each month index, we have the portfolio return
@@ -1038,7 +1054,7 @@ export function runBootstrapMonteCarlo(config) {
       if (dateIdx >= 0) {
         assetReturn = data.returns[dateIdx];
       } else if (fillMissing) {
-        assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights);
+        assetReturn = simulateMissingReturn(asset, date, assets, returnData, regimeWeights, fillRng);
         anyMissing = true;
       } else {
         anyMissing = true;
