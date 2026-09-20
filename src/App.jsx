@@ -41,6 +41,13 @@ function App() {
   const [returnMetadata, setReturnMetadata] = useState({});
   const [returnErrors, setReturnErrors] = useState({});
 
+  // Apply a (possibly partial) batch of fetched return data to state
+  const applyReturnBatch = useCallback(({ data, metadata, errors }) => {
+    setReturnData(data);
+    setReturnMetadata(metadata);
+    setReturnErrors(errors);
+  }, []);
+
   // Auto-fetch historical data for ALL assets on mount
   const hasFetchedRef = useRef(false);
   useEffect(() => {
@@ -50,10 +57,10 @@ function App() {
     const fetchAll = async () => {
       setIsFetchingReturns(true);
       try {
-        const { data, metadata, errors } = await fetchAllReturns(ASSETS);
-        setReturnData(data);
-        setReturnMetadata(metadata);
-        setReturnErrors(errors);
+        // Render progressively: snapshot/cache hits appear instantly, live
+        // fetches land one by one instead of waiting for the slowest ticker.
+        const final = await fetchAllReturns(ASSETS, { onData: applyReturnBatch });
+        applyReturnBatch(final);
       } catch (err) {
         console.error('Auto-fetch error:', err);
       } finally {
@@ -188,10 +195,10 @@ function App() {
   const handleFetchReturns = useCallback(async () => {
     setIsFetchingReturns(true);
     try {
-      const { data, metadata, errors } = await fetchAllReturns(ASSETS);
-      setReturnData(data);
-      setReturnMetadata(metadata);
-      setReturnErrors(errors);
+      // Manual refresh bypasses the browser cache and re-fetches live,
+      // keeping snapshot values as a fallback for anything that fails.
+      const final = await fetchAllReturns(ASSETS, { onData: applyReturnBatch, forceRefresh: true });
+      applyReturnBatch(final);
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {

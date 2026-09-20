@@ -33,6 +33,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fetch monthly returns server-side into public/data/returns.json so the
+      # site loads market data same-origin (no browser CORS proxies needed).
+      # Never fails the deploy: on a Yahoo outage the committed snapshot is kept.
+      - name: Refresh market data snapshot
+        run: node scripts/fetch-returns.mjs
+        continue-on-error: true
+
       - name: Build
         run: npm run build
         env:
