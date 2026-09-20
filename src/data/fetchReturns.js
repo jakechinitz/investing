@@ -217,13 +217,15 @@ export function parseYahooChart(json, ticker) {
  * Fetch monthly return data for one ticker from Yahoo Finance.
  * @param {string} ticker
  * @param {string|null} startDate - YYYY-MM-DD, or null for full history
+ * @param {Object} [opts]
+ * @param {number[]} [opts.retryDelays] - ms to wait before each retry (default one retry, 1.5s)
  */
-export async function fetchMonthlyReturns(ticker, startDate = null) {
+export async function fetchMonthlyReturns(ticker, startDate = null, { retryDelays = RETRY_DELAYS_MS } = {}) {
   const period1 = startDate ? Math.floor(new Date(startDate).getTime() / 1000) : 0;
   const period2 = Math.floor(Date.now() / 1000);
 
   let lastError = null;
-  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+  for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
     const host = YAHOO_HOSTS[attempt % YAHOO_HOSTS.length];
     try {
       const json = await fetchChartOnce(ticker, period1, period2, host);
@@ -232,7 +234,7 @@ export async function fetchMonthlyReturns(ticker, startDate = null) {
       lastError = e;
       if (e instanceof SymbolError) break;
     }
-    if (attempt < RETRY_DELAYS_MS.length) await sleep(RETRY_DELAYS_MS[attempt]);
+    if (attempt < retryDelays.length) await sleep(retryDelays[attempt]);
   }
   throw new Error(`Failed to fetch data for ${ticker}: ${lastError?.message || 'No data returned'}`);
 }
@@ -304,6 +306,9 @@ async function loadSnapshot() {
  * @param {boolean}  [opts.useCache]      - read/write the localStorage cache (default true)
  * @param {boolean}  [opts.forceRefresh]  - ignore cache, re-fetch even snapshot tickers,
  *                                          keeping snapshot data only as a fallback
+ * @param {number}   [opts.interRequestDelayMs] - pause per worker between tickers (rate-limit
+ *                                          courtesy; used by the CI snapshot script)
+ * @param {number[]} [opts.retryDelays]   - per-ticker retry schedule (see fetchMonthlyReturns)
  * @returns {Promise<{data: Object, metadata: Object, errors: Object}>}
  */
 export async function fetchAllReturns(assets, opts = {}) {
@@ -314,6 +319,8 @@ export async function fetchAllReturns(assets, opts = {}) {
     useSnapshot = true,
     useCache = true,
     forceRefresh = false,
+    interRequestDelayMs = 0,
+    retryDelays,
   } = opts;
 
   const results = {};
@@ -378,7 +385,7 @@ export async function fetchAllReturns(assets, opts = {}) {
   const inflight = new Map();
   const getTicker = (ticker) => {
     if (results[ticker] && !metadata[ticker]?.stale && !forceRefresh) return Promise.resolve(results[ticker]);
-    if (!inflight.has(ticker)) inflight.set(ticker, fetchMonthlyReturns(ticker));
+    if (!inflight.has(ticker)) inflight.set(ticker, fetchMonthlyReturns(ticker, null, retryDelays ? { retryDelays } : {}));
     return inflight.get(ticker);
   };
 
@@ -441,6 +448,7 @@ export async function fetchAllReturns(assets, opts = {}) {
       await fetchOne(asset);
       done += 1;
       onProgress?.(done, pending.length, asset.ticker);
+      if (interRequestDelayMs > 0 && queue.length > 0) await sleep(interRequestDelayMs);
     }
   };
   const nWorkers = Math.max(1, Math.min(concurrency, pending.length));

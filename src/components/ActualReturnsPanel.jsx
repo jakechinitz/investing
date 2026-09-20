@@ -145,9 +145,9 @@ function ActualReturnsPanel({
           <div className="tab-title">Historical Returns</div>
           <div className="tab-description">
             {hasData
-              ? `${allTickers.length} assets loaded from Yahoo Finance`
+              ? `${allTickers.length} of ${ASSETS.length} assets loaded${isFetching ? ' \u2014 fetching the rest\u2026' : ''}`
               : isFetching
-              ? 'Loading historical data for all assets...'
+              ? 'Loading historical data\u2026'
               : 'Historical data auto-loads on startup'}
           </div>
         </div>
@@ -171,7 +171,7 @@ function ActualReturnsPanel({
       {isFetching && !hasData && (
         <div className="loading-overlay">
           <span className="spinner" style={{ width: 32, height: 32, borderWidth: 2 }} />
-          <span>Loading historical data for all {ASSETS.length} assets...</span>
+          <span>Loading historical data for {ASSETS.length} assets\u2026 portfolio and preset assets appear first; the rest stream in behind them.</span>
         </div>
       )}
 
