@@ -142,11 +142,13 @@ export function _resetProxyState() {
  * Throws SymbolError for a definitive "no such symbol"; otherwise throws the
  * last transport error.
  */
-async function fetchChartOnce(ticker, period1, period2, host) {
+async function fetchChartOnce(ticker, period1, period2, host, useProxies = true) {
   const baseUrl = yahooChartUrl(host, ticker, period1, period2);
   const candidates = [{ name: 'direct', url: baseUrl, proxy: null }];
-  for (const p of await pickProxies()) {
-    candidates.push({ name: p.name, url: p.build(baseUrl), proxy: p });
+  if (useProxies) {
+    for (const p of await pickProxies()) {
+      candidates.push({ name: p.name, url: p.build(baseUrl), proxy: p });
+    }
   }
 
   let lastError = null;
@@ -182,7 +184,8 @@ async function fetchChartOnce(ticker, period1, period2, host) {
     } catch (e) {
       if (e instanceof SymbolError) throw e;
       if (c.proxy) proxyFailed(c.proxy);
-      lastError = e?.name === 'AbortError' ? new Error(`${c.name}: timeout`) : e;
+      const why = e?.name === 'AbortError' ? 'timeout' : (e?.cause?.code || e?.message || String(e));
+      lastError = new Error(`${c.name}: ${why}`);
     }
   }
   throw lastError || new Error('No response');
@@ -253,9 +256,12 @@ export function parseYahooChart(json, ticker) {
  * @param {string} ticker
  * @param {string|null} startDate - YYYY-MM-DD, or null for full history
  * @param {Object} [opts]
- * @param {number[]} [opts.retryDelays] - ms to wait before each retry (default one retry, 1.5s)
+ * @param {number[]} [opts.retryDelays] - ms to wait before each retry (default two retries)
+ * @param {boolean}  [opts.useProxies]  - try CORS proxies after the direct request (default true;
+ *                                        server-side callers may disable, since proxies mostly
+ *                                        reject or throttle non-browser clients)
  */
-export async function fetchMonthlyReturns(ticker, startDate = null, { retryDelays = RETRY_DELAYS_MS } = {}) {
+export async function fetchMonthlyReturns(ticker, startDate = null, { retryDelays = RETRY_DELAYS_MS, useProxies = true } = {}) {
   const period1 = startDate ? Math.floor(new Date(startDate).getTime() / 1000) : 0;
   const period2 = Math.floor(Date.now() / 1000);
 
@@ -263,7 +269,7 @@ export async function fetchMonthlyReturns(ticker, startDate = null, { retryDelay
   for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
     const host = YAHOO_HOSTS[attempt % YAHOO_HOSTS.length];
     try {
-      const json = await fetchChartOnce(ticker, period1, period2, host);
+      const json = await fetchChartOnce(ticker, period1, period2, host, useProxies);
       return parseYahooChart(json, ticker);
     } catch (e) {
       lastError = e;
@@ -344,6 +350,7 @@ async function loadSnapshot() {
  * @param {number}   [opts.interRequestDelayMs] - pause per worker between tickers (rate-limit
  *                                          courtesy; used by the CI snapshot script)
  * @param {number[]} [opts.retryDelays]   - per-ticker retry schedule (see fetchMonthlyReturns)
+ * @param {boolean}  [opts.useProxies]    - try CORS proxies after direct (default true)
  * @returns {Promise<{data: Object, metadata: Object, errors: Object}>}
  */
 export async function fetchAllReturns(assets, opts = {}) {
@@ -356,6 +363,7 @@ export async function fetchAllReturns(assets, opts = {}) {
     forceRefresh = false,
     interRequestDelayMs = 0,
     retryDelays,
+    useProxies = true,
   } = opts;
 
   const results = {};
@@ -420,7 +428,7 @@ export async function fetchAllReturns(assets, opts = {}) {
   const inflight = new Map();
   const getTicker = (ticker) => {
     if (results[ticker] && !metadata[ticker]?.stale && !forceRefresh) return Promise.resolve(results[ticker]);
-    if (!inflight.has(ticker)) inflight.set(ticker, fetchMonthlyReturns(ticker, null, retryDelays ? { retryDelays } : {}));
+    if (!inflight.has(ticker)) inflight.set(ticker, fetchMonthlyReturns(ticker, null, { ...(retryDelays ? { retryDelays } : {}), useProxies }));
     return inflight.get(ticker);
   };
 
