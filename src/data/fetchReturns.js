@@ -20,14 +20,17 @@ const CORS_PROXIES = [
   { name: 'corsproxy.io', build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
   { name: 'allorigins', build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
   { name: 'codetabs', build: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` },
+  { name: 'cors.lol', build: (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}` },
+  { name: 'thingproxy', build: (url) => `https://thingproxy.freeboard.io/fetch/${url}` },
 ];
 
 const FETCH_TIMEOUT_MS = 8000;          // per request attempt
-const MAX_CONCURRENT = 4;               // simultaneous tickers (free proxies rate-limit bursts)
-const RETRY_DELAYS_MS = [1500];         // one retry per ticker, on the alternate Yahoo host
-const PROXY_TRIP_FAILURES = 4;          // consecutive failures before a proxy is benched
-const PROXY_COOLDOWN_MS = 60_000;       // how long a benched proxy sits out
-const PROXY_RATE_LIMIT_COOLDOWN_MS = 30_000;
+const MAX_CONCURRENT = 6;               // simultaneous tickers
+const RETRY_DELAYS_MS = [1500, 4000];   // two retries per ticker, alternating Yahoo host
+const PROXY_TRIP_FAILURES = 4;          // consecutive hard failures (timeout/5xx/garbage) before a proxy is benched
+const PROXY_COOLDOWN_MS = 60_000;       // how long a benched (dead/hanging) proxy sits out
+const PROXY_RATE_LIMIT_COOLDOWN_MS = 15_000; // pause after a 429 before using that proxy again
+const MAX_RATE_LIMIT_WAIT_MS = 15_000;  // longest we pause a ticker waiting for any proxy to un-throttle
 
 const CACHE_KEY = 'investing:returns:v1';
 const CACHE_TTL_MS = 20 * 60 * 60 * 1000;          // monthly data: refresh at most daily
@@ -68,31 +71,63 @@ function yahooChartUrl(host, ticker, period1, period2) {
   return `https://${host}/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1mo`;
 }
 
-// ─── Per-proxy circuit breaker ───
-// A proxy that keeps failing (down, rate-limiting, hanging) is benched for a
-// while so the remaining tickers don't each burn a timeout on it.
+// ─── Per-proxy health ───
+// Two distinct failure modes, handled differently:
+//   * Rate-limited (HTTP 429): the proxy works but wants us to slow down. It is
+//     throttled briefly; if EVERY proxy is throttled, the ticker pauses until the
+//     first one un-throttles (bounded) rather than burning its attempts on 429s.
+//   * Dead/hanging (timeout, 5xx, garbage): after a few consecutive failures the
+//     proxy is benched so other tickers don't each pay an 8s timeout on it.
+// A ticker is never left with nothing to try: if no proxy is healthy, the two
+// closest to recovery are used anyway.
 
-const proxyState = new Map(); // name -> { failures, disabledUntil }
+const proxyState = new Map(); // name -> { failures, benchedUntil, rateLimitedUntil }
 
-function proxyAvailable(proxy) {
-  const s = proxyState.get(proxy.name);
-  return !s || s.disabledUntil <= Date.now();
+function stateOf(proxy) {
+  let s = proxyState.get(proxy.name);
+  if (!s) { s = { failures: 0, benchedUntil: 0, rateLimitedUntil: 0 }; proxyState.set(proxy.name, s); }
+  return s;
+}
+const recoveryTime = (p) => { const s = proxyState.get(p.name); return s ? Math.max(s.benchedUntil, s.rateLimitedUntil) : 0; };
+const isHealthy = (p, now) => recoveryTime(p) <= now;
+
+/** Proxies to try for one attempt, healthiest first; may pause if all are rate-limited. */
+async function pickProxies() {
+  let now = Date.now();
+  let healthy = CORS_PROXIES.filter((p) => isHealthy(p, now));
+  if (healthy.length === 0) {
+    const throttled = CORS_PROXIES.map((p) => proxyState.get(p.name)?.rateLimitedUntil || 0).filter((t) => t > now);
+    if (throttled.length > 0) {
+      await sleep(Math.min(Math.min(...throttled) - now, MAX_RATE_LIMIT_WAIT_MS));
+      now = Date.now();
+      healthy = CORS_PROXIES.filter((p) => isHealthy(p, now));
+    }
+  }
+  if (healthy.length > 0) {
+    return healthy.sort((a, b) => (proxyState.get(a.name)?.failures || 0) - (proxyState.get(b.name)?.failures || 0));
+  }
+  // Everything is down: try the two closest to recovery rather than nothing.
+  return [...CORS_PROXIES].sort((a, b) => recoveryTime(a) - recoveryTime(b)).slice(0, 2);
 }
 
 function proxyFailed(proxy, httpStatus) {
-  const s = proxyState.get(proxy.name) || { failures: 0, disabledUntil: 0 };
-  s.failures += 1;
+  const s = stateOf(proxy);
   if (httpStatus === 429) {
-    s.disabledUntil = Date.now() + PROXY_RATE_LIMIT_COOLDOWN_MS;
-  } else if (s.failures >= PROXY_TRIP_FAILURES) {
-    s.disabledUntil = Date.now() + PROXY_COOLDOWN_MS;
+    s.rateLimitedUntil = Date.now() + PROXY_RATE_LIMIT_COOLDOWN_MS;
+    return;
+  }
+  s.failures += 1;
+  if (s.failures >= PROXY_TRIP_FAILURES) {
+    s.benchedUntil = Date.now() + PROXY_COOLDOWN_MS;
     s.failures = 0;
   }
-  proxyState.set(proxy.name, s);
 }
 
 function proxySucceeded(proxy) {
-  proxyState.set(proxy.name, { failures: 0, disabledUntil: 0 });
+  const s = stateOf(proxy);
+  s.failures = 0;
+  s.benchedUntil = 0;
+  s.rateLimitedUntil = 0;
 }
 
 /** Exposed for tests / diagnostics. */
@@ -110,8 +145,8 @@ export function _resetProxyState() {
 async function fetchChartOnce(ticker, period1, period2, host) {
   const baseUrl = yahooChartUrl(host, ticker, period1, period2);
   const candidates = [{ name: 'direct', url: baseUrl, proxy: null }];
-  for (const p of CORS_PROXIES) {
-    if (proxyAvailable(p)) candidates.push({ name: p.name, url: p.build(baseUrl), proxy: p });
+  for (const p of await pickProxies()) {
+    candidates.push({ name: p.name, url: p.build(baseUrl), proxy: p });
   }
 
   let lastError = null;
