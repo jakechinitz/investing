@@ -29,11 +29,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_OUT_PATH = resolve(__dirname, '../public/data/returns.json');
 export const DEFAULT_STATUS_PATH = resolve(__dirname, '../public/data/snapshot-status.json');
 
+// Yahoo throttles a datacenter IP that fires ~90 requests in a couple of
+// minutes (first CI run: 62/92 succeeded). From a server, the CORS proxies are
+// nearly useless (403 without a browser Origin, 429, timeouts) and each miss
+// costs an 8s timeout, so: go direct, slowly, and sweep the failures again
+// after a pause. Proxies only on the final pass as a last resort.
+export const DEFAULT_PASSES = [
+  { label: 'direct',        useProxies: false, concurrency: 1, interRequestDelayMs: 900,  retryDelays: [4000, 10000],  pauseBeforeMs: 0 },
+  { label: 'direct-retry',  useProxies: false, concurrency: 1, interRequestDelayMs: 1500, retryDelays: [10000, 20000], pauseBeforeMs: 45000 },
+  { label: 'direct-retry2', useProxies: false, concurrency: 1, interRequestDelayMs: 2000, retryDelays: [15000, 30000], pauseBeforeMs: 60000 },
+  { label: 'with-proxies',  useProxies: true,  concurrency: 1, interRequestDelayMs: 1000, retryDelays: [5000],         pauseBeforeMs: 30000 },
+];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export async function buildSnapshot({
   assets = ASSETS,
   outPath = DEFAULT_OUT_PATH,
   statusPath = DEFAULT_STATUS_PATH,
-  concurrency = 2,
+  passes = DEFAULT_PASSES,
   log = console.log,
   now = () => new Date(),
 } = {}) {
@@ -45,19 +58,42 @@ export async function buildSnapshot({
   }
 
   const total = assets.length;
-  log(`Fetching monthly returns for ${total} tickers (concurrency ${concurrency})...`);
-  const { data, metadata, errors } = await fetchAllReturns(assets, {
-    concurrency,
-    useSnapshot: false,
-    useCache: false,
-    // Be patient and polite with Yahoo from a datacenter IP: pace requests and
-    // retry 429s/hiccups with growing backoff rather than giving up quickly.
-    interRequestDelayMs: 350,
-    retryDelays: [2000, 5000, 12000],
-    onProgress: (done, n, ticker) => {
-      if (done % 10 === 0 || done === n) log(`  ${done}/${n} (${ticker})`);
-    },
-  });
+  const data = {};
+  const metadata = {};
+  let errors = {};
+  let remaining = [...assets];
+  const passLog = [];
+
+  for (let i = 0; i < passes.length && remaining.length > 0; i++) {
+    const pass = passes[i];
+    if (pass.pauseBeforeMs > 0) {
+      log(`Pausing ${Math.round(pass.pauseBeforeMs / 1000)}s before pass "${pass.label}" (${remaining.length} tickers left)...`);
+      await sleep(pass.pauseBeforeMs);
+    }
+    log(`Pass ${i + 1}/${passes.length} "${pass.label}": ${remaining.length} tickers, concurrency ${pass.concurrency}, ${pass.interRequestDelayMs}ms pacing, proxies ${pass.useProxies ? 'on' : 'off'}`);
+    const t0 = Date.now();
+    const res = await fetchAllReturns(remaining, {
+      concurrency: pass.concurrency,
+      useSnapshot: false,
+      useCache: false,
+      useProxies: pass.useProxies,
+      interRequestDelayMs: pass.interRequestDelayMs,
+      retryDelays: pass.retryDelays,
+      onProgress: (done, n, ticker) => {
+        if (done % 10 === 0 || done === n) log(`  ${done}/${n} (${ticker})`);
+      },
+    });
+    let got = 0;
+    for (const [t, rec] of Object.entries(res.data)) {
+      if (!data[t]) got += 1;
+      data[t] = rec;
+      metadata[t] = res.metadata[t];
+    }
+    errors = res.errors;
+    remaining = remaining.filter((a) => !data[a.ticker]);
+    passLog.push({ pass: pass.label, fetched: got, remaining: remaining.length, seconds: Math.round((Date.now() - t0) / 1000) });
+    log(`  -> +${got} fetched, ${remaining.length} still missing (${passLog.at(-1).seconds}s)`);
+  }
 
   const ok = Object.keys(data).length;
   const ratio = total > 0 ? ok / total : 0;
@@ -72,6 +108,7 @@ export async function buildSnapshot({
       total,
       snapshotTickers: null,
       ...extra,
+      passes: passLog,
       errors,
       node: process.version,
     };
