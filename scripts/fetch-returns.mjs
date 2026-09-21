@@ -8,10 +8,13 @@
  * Runs in CI before `vite build` (see .github/workflows/deploy.yml) and daily
  * via .github/workflows/refresh-data.yml.
  *
- * Safety: never replaces a good snapshot with a bad one. If fewer than
- * MIN_SUCCESS_RATIO of tickers succeed, the existing file is kept and the
- * process exits 0 so a Yahoo outage cannot fail a deploy. Tickers that fail
- * this run keep their previous values from the existing snapshot.
+ * Safety: a run can only ADD or REFRESH tickers, never remove them — tickers
+ * that fail this run keep their previous values from the existing snapshot.
+ * If nothing at all could be fetched the existing file is left untouched.
+ * Exit code is 0 regardless so a Yahoo outage cannot fail a deploy.
+ *
+ * Always writes public/data/snapshot-status.json describing the run (counts,
+ * per-ticker errors) so failures in CI can be diagnosed from the repo itself.
  *
  * Usage: node scripts/fetch-returns.mjs [--strict]
  *   --strict   exit non-zero when nothing was written
@@ -24,11 +27,12 @@ import { fetchAllReturns, compactRecord } from '../src/data/fetchReturns.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_OUT_PATH = resolve(__dirname, '../public/data/returns.json');
-const MIN_SUCCESS_RATIO = 0.5;
+export const DEFAULT_STATUS_PATH = resolve(__dirname, '../public/data/snapshot-status.json');
 
 export async function buildSnapshot({
   assets = ASSETS,
   outPath = DEFAULT_OUT_PATH,
+  statusPath = DEFAULT_STATUS_PATH,
   concurrency = 2,
   log = console.log,
   now = () => new Date(),
@@ -60,11 +64,24 @@ export async function buildSnapshot({
   log(`Fetched ${ok}/${total} tickers (${(ratio * 100).toFixed(0)}%)`);
   for (const [t, msg] of Object.entries(errors)) log(`  x ${t}: ${msg}`);
 
-  if (ratio < MIN_SUCCESS_RATIO) {
-    log(
-      `Below ${MIN_SUCCESS_RATIO * 100}% success - keeping existing snapshot` +
-        (previous ? ` from ${previous.generatedAt}.` : ' (none exists).')
-    );
+  const writeStatus = async (extra) => {
+    if (!statusPath) return;
+    const status = {
+      ranAt: now().toISOString(),
+      fetched: ok,
+      total,
+      snapshotTickers: null,
+      ...extra,
+      errors,
+      node: process.version,
+    };
+    await mkdir(dirname(statusPath), { recursive: true });
+    await writeFile(statusPath, JSON.stringify(status, null, 2) + '\n');
+  };
+
+  if (ok === 0) {
+    log('Nothing fetched - keeping existing snapshot' + (previous ? ` from ${previous.generatedAt}.` : ' (none exists).'));
+    await writeStatus({ written: false, reason: 'no tickers fetched', snapshotTickers: previous ? Object.keys(previous.data || {}).length : 0 });
     return { written: false, ok, total, errors };
   }
 
@@ -97,6 +114,7 @@ export async function buildSnapshot({
   await mkdir(dirname(outPath), { recursive: true });
   const body = JSON.stringify(snapshot);
   await writeFile(outPath, body);
+  await writeStatus({ written: true, carried, snapshotTickers: Object.keys(outData).length, bytes: Buffer.byteLength(body) });
   log(
     `Wrote ${outPath}: ${Object.keys(outData).length} tickers` +
       (carried ? ` (${carried} carried over from previous snapshot)` : '') +
